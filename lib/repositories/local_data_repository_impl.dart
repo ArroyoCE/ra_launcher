@@ -10,6 +10,8 @@ import 'package:retroachievements_organizer/models/consoles/all_console_model.da
 import 'package:retroachievements_organizer/models/local/hash_model.dart';
 import 'package:retroachievements_organizer/repositories/local_data_repository.dart';
 import 'package:retroachievements_organizer/services/hashing/3DO/hash_3do_main.dart';
+import 'package:retroachievements_organizer/services/hashing/arduboy_hash.dart';
+import 'package:retroachievements_organizer/services/hashing/combined_console_hash_integration.dart';
 import 'package:retroachievements_organizer/services/hashing/psx/psx_hash_integration.dart';
 import 'package:retroachievements_organizer/services/storage_service.dart';
 
@@ -17,6 +19,7 @@ class LocalDataRepositoryImpl implements LocalDataRepository {
   final StorageService _storageService;
   final PsxHashIntegration _psxHashIntegration = PsxHashIntegration();
   final ThreeDOHashIntegration _threeDOHashIntegration = ThreeDOHashIntegration();
+  final combinedConsoleHashIntegration = CombinedConsoleHashIntegration();
   
   LocalDataRepositoryImpl(this._storageService);
   
@@ -261,10 +264,12 @@ Future<Map<String, dynamic>?> getHashStats(int consoleId) async {
   }
 
   @override
+@override
 Future<Map<String, String>> hashFilesInFolders(int consoleId, List<String> folders) async {
   final Map<String, String> hashes = {};
   final validExtensions = getFileExtensionsForConsole(consoleId);
   final hashMethod = getHashMethodForConsole(consoleId);
+
   
   // Check if folders list is empty
   if (folders.isEmpty) {
@@ -272,6 +277,16 @@ Future<Map<String, String>> hashFilesInFolders(int consoleId, List<String> folde
   }
 
   try {
+    // Special case for Arduboy
+    if (hashMethod == HashMethod.arduboy) {
+      final arduboyHashIntegration = ArduboyHashIntegration();
+      final arduboyHashes = await arduboyHashIntegration.hashArduboyFilesInFolders(folders);
+      
+      // Save the Arduboy hashes
+      await saveLocalHashes(consoleId, arduboyHashes);
+      return arduboyHashes;
+    }
+
     // Special case for PlayStation - we handle this differently
     if (hashMethod == HashMethod.psx) {
       debugPrint('Starting PlayStation hashing, this might take some time...');
@@ -284,16 +299,66 @@ Future<Map<String, String>> hashFilesInFolders(int consoleId, List<String> folde
       return psxHashes;
     }
 
-if (hashMethod == HashMethod.threedo) {
-  debugPrint('Starting 3DO hashing, this might take some time...');
-  
-  // This will handle UI updates internally
-  final threedoHashes = await _threeDOHashIntegration.hash3DOFilesInFolders(folders);
-  
-  // Save the 3DO hashes
-  await saveLocalHashes(consoleId, threedoHashes);
-  return threedoHashes;
-}
+    // Special case for Arcade
+    if (hashMethod == HashMethod.arcade) {
+      debugPrint('Starting Arcade hashing, this might take some time...');
+    
+      final Map<String, String> arcadeHashes = {};
+    
+      for (final folderPath in folders) {
+        final directory = Directory(folderPath);
+        
+        if (await directory.exists()) {
+          await for (final entity in directory.list(recursive: true)) {
+            if (entity is File) {
+              final extension = path.extension(entity.path).toLowerCase();
+              
+              // Only process zip and 7z files for arcade
+              if (extension == '.zip' || extension == '.7z') {
+                // Get just the filename without extension
+                final filename = path.basenameWithoutExtension(entity.path);
+                
+                // Hash just the filename
+                final hashBytes = md5.convert(utf8.encode(filename)).bytes;
+                final hash = hashBytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
+                
+                arcadeHashes[entity.path] = hash;
+                debugPrint('Hashed arcade file: ${entity.path} -> $hash');
+              }
+            }
+          }
+        }
+      }
+    
+      // Save the arcade hashes
+      await saveLocalHashes(consoleId, arcadeHashes);
+      return arcadeHashes;
+    }
+
+    // Special case for 3DO
+    if (hashMethod == HashMethod.threedo) {
+      debugPrint('Starting 3DO hashing, this might take some time...');
+      
+      // This will handle UI updates internally
+      final threedoHashes = await _threeDOHashIntegration.hash3DOFilesInFolders(folders);
+      
+      // Save the 3DO hashes
+      await saveLocalHashes(consoleId, threedoHashes);
+      return threedoHashes;
+    }
+    
+    // Add special case for Combined Console hashing method
+    if (hashMethod == HashMethod.combined) {
+      debugPrint('Starting combined console hashing for console $consoleId, this might take some time...');
+      
+      // Use the CombinedConsoleHashIntegration to handle this console
+      
+      final combinedHashes = await combinedConsoleHashIntegration.hashFilesForConsole(folders, consoleId);
+      
+      // Save the combined console hashes
+      await saveLocalHashes(consoleId, combinedHashes);
+      return combinedHashes;
+    }
     
     // For other consoles, process files with proper UI updates
     final List<File> filesToProcess = [];
@@ -337,6 +402,11 @@ if (hashMethod == HashMethod.threedo) {
           case HashMethod.sha1:
             fileHash = sha1.convert(bytes).toString();
             break;
+          case HashMethod.crc32:
+            // Implement CRC32 hashing if needed
+            final crc = _calculateCrc32(bytes);
+            fileHash = crc.toRadixString(16).padLeft(8, '0');
+            break;
           default:
             fileHash = md5.convert(bytes).toString();
         }
@@ -363,6 +433,13 @@ if (hashMethod == HashMethod.threedo) {
   }
 }
 
+// You would need to implement this method for CRC32 if needed
+int _calculateCrc32(Uint8List bytes) {
+  // CRC32 calculation logic here
+  // You might want to implement this or use a package like 'crc32' from pub.dev
+  // For now, returning a placeholder value
+  return 0;
+}
 
   @override
   Future<void> saveLocalHashes(int consoleId, Map<String, String> hashes) async {

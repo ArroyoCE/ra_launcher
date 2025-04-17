@@ -1,8 +1,9 @@
 // File: lib/3do/hash_3do_main.dart
 
 import 'dart:io';
-import 'package:retroachievements_organizer/services/hashing/3do/hash_3do_chd.dart';
+
 import 'package:retroachievements_organizer/services/hashing/3do/hash_3do_cue.dart';
+import 'package:retroachievements_organizer/services/hashing/3do/isolate_3do_chd_processor.dart';
 
 /// Class to handle 3DO hashing operations
 class ThreeDOHashIntegration {
@@ -49,13 +50,13 @@ class Hash3DO {
     
     switch (extension) {
       case 'chd':
-        return Hash3DOCalculator.calculateHash(filePath);
+        // Use the isolate processor for CHD files to prevent UI freezing
+        return Isolate3DOChdProcessor.processChd(filePath);
         
       case 'cue':
         return Hash3DOCueCalculator.calculateHash(filePath);
         
       default:
-        print('Unsupported file extension for 3DO hashing: $extension');
         return null;
     }
   }

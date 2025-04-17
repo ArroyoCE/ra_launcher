@@ -10,41 +10,6 @@ import 'package:path/path.dart' as path;
 class Hash3DOCueCalculator {
   static const List<int> OPERA_FS_IDENTIFIER = [0x01, 0x5A, 0x5A, 0x5A, 0x5A, 0x5A, 0x01];
   
-  static Future<bool> _addFileContentsToList(
-    RandomAccessFile fileHandle, 
-    int sectorSize,
-    int fsOffset,
-    int blockLocation, 
-    int fileSize,
-    List<int> allBytes) async {
-  
-    int sector = blockLocation ~/ 2048;
-    int remaining = fileSize;
-    
-    while (remaining > 0) {
-      await fileHandle.setPosition(sector * sectorSize);
-      final buffer = Uint8List(sectorSize);
-      final bytesRead = await fileHandle.readInto(buffer);
-      
-      if (bytesRead < sectorSize) {
-        print('Could not read file sector');
-        return false;
-      }
-      
-      final bytesToAdd = remaining > 2048 ? 2048 : remaining;
-      print('Adding $bytesToAdd bytes from sector $sector');
-      
-      final sectorData = buffer.sublist(fsOffset, fsOffset + bytesToAdd);
-      
-      // Add data to the list
-      allBytes.addAll(sectorData);
-      
-      sector++;
-      remaining -= bytesToAdd;
-    }
-    
-    return true;
-  }
 
   /// Calculate hash for a 3DO CUE file
   /// Returns the MD5 hash as a hex string, or null if an error occurs
@@ -52,7 +17,6 @@ class Hash3DOCueCalculator {
     // Parse the CUE file to find the associated BIN file
     final File cueFile = File(cuePath);
     if (!await cueFile.exists()) {
-      print('CUE file not found: $cuePath');
       return null;
     }
     
@@ -60,15 +24,12 @@ class Hash3DOCueCalculator {
     final String? binPath = _extractBinPath(cueContent, cuePath);
     
     if (binPath == null) {
-      print('Could not find BIN file in CUE: $cuePath');
       return null;
     }
     
-    print('Looking for BIN file at: $binPath');
     
     final File binFile = File(binPath);
     if (!await binFile.exists()) {
-      print('BIN file not found: $binPath');
       return null;
     }
     
@@ -81,19 +42,16 @@ class Hash3DOCueCalculator {
       final int sectorSize = trackInfo['sectorSize'] ?? 2352;
       final int dataOffset = trackInfo['mode'] == 1 ? 16 : 0;
       
-      print('Using sector size: $sectorSize, data offset: $dataOffset');
       
       // Read the first sector to check for Opera filesystem
       final Uint8List sectorData = Uint8List(sectorSize);
       final int bytesRead = await binHandle.readInto(sectorData);
       
       if (bytesRead < sectorSize) {
-        print('Could not read first sector');
         return null;
       }
       
       // Debug output
-      print('First 16 bytes of sector: ${_bytesToHex(sectorData.sublist(0, 16))}');
       
       // First look for the Opera filesystem AFTER the 16-byte sync pattern if MODE1
       bool found = false;
@@ -110,10 +68,8 @@ class Hash3DOCueCalculator {
       
       // If not found at the standard offset, scan the entire sector
       if (!found) {
-        print('Opera filesystem not found at standard offset, scanning sector...');
         for (int i = 0; i < sectorData.length - OPERA_FS_IDENTIFIER.length; i++) {
           if (_compareBytes(sectorData, i, Uint8List.fromList(OPERA_FS_IDENTIFIER), 0, OPERA_FS_IDENTIFIER.length)) {
-            print('Found Opera filesystem at offset $i');
             found = true;
             fsOffset = i;
             break;
@@ -123,16 +79,13 @@ class Hash3DOCueCalculator {
       
       // If still not found, try sector 16 (sometimes used as start sector)
       if (!found) {
-        print('Opera filesystem not found in sector 0, trying sector 16...');
         await binHandle.setPosition(16 * sectorSize);
         final bytesRead = await binHandle.readInto(sectorData);
         
         if (bytesRead < sectorSize) {
-          print('Could not read sector 16');
           return null;
         }
         
-        print('First 16 bytes of sector 16: ${_bytesToHex(sectorData.sublist(0, 16))}');
         
         // First look for the Opera filesystem AFTER the 16-byte sync pattern if MODE1
         if (dataOffset > 0 && sectorData.length >= dataOffset + OPERA_FS_IDENTIFIER.length) {
@@ -146,7 +99,6 @@ class Hash3DOCueCalculator {
         if (!found) {
           for (int i = 0; i < sectorData.length - OPERA_FS_IDENTIFIER.length; i++) {
             if (_compareBytes(sectorData, i, Uint8List.fromList(OPERA_FS_IDENTIFIER), 0, OPERA_FS_IDENTIFIER.length)) {
-              print('Found Opera filesystem at offset $i in sector 16');
               found = true;
               fsOffset = i;
               break;
@@ -156,39 +108,32 @@ class Hash3DOCueCalculator {
       }
       
       if (!found) {
-        print('Not a 3DO CD (Opera filesystem not found)');
         return null;
       }
       
-      print('Found 3DO CD, title: ${_extractTitle(sectorData, fsOffset)}');
       
       // Parse the block size and root directory location from the header
       final blockSize = _getBlockSize(sectorData, fsOffset);
       final rootBlockLocation = _getRootBlockLocation(sectorData, fsOffset) * blockSize;
       
-      print('Block size: $blockSize, Root directory location: $rootBlockLocation');
       
       // Find the LaunchMe file
       final launchMeInfo = await _findLaunchMeFile(binHandle, sectorSize, fsOffset, rootBlockLocation, blockSize);
       if (launchMeInfo == null) {
-        print('Could not find LaunchMe file');
         return null;
       }
       
       final launchMeLocation = launchMeInfo['location'] as int;
       final launchMeSize = launchMeInfo['size'] as int;
       
-      print('Found LaunchMe file at block location: $launchMeLocation, size: $launchMeSize');
       
       // Create a list to hold all bytes to hash
       final List<int> allBytes = [];
       
       // First add the volume header (132 bytes)
-      print('Adding 132-byte volume header to hash');
       allBytes.addAll(sectorData.sublist(fsOffset, fsOffset + 132));
       
       // Then add the LaunchMe file contents
-      print('Adding LaunchMe file contents to hash');
       
       int sector = launchMeLocation ~/ 2048;
       int remaining = launchMeSize;
@@ -199,12 +144,10 @@ class Hash3DOCueCalculator {
         final bytesRead = await binHandle.readInto(buffer);
         
         if (bytesRead < sectorSize) {
-          print('Could not read file sector');
           return null;
         }
         
         final bytesToHash = remaining > 2048 ? 2048 : remaining;
-        print('Adding $bytesToHash bytes from sector $sector');
         
         final sectorData = buffer.sublist(fsOffset, fsOffset + bytesToHash);
         
@@ -216,10 +159,9 @@ class Hash3DOCueCalculator {
       }
       
       // Calculate the final hash
-      final md5 = crypto.md5;
+      const md5 = crypto.md5;
       final finalDigest = md5.convert(allBytes);
       
-      print('Final hash: ${finalDigest.toString()}');
       return finalDigest.toString();
       
     } finally {
@@ -227,10 +169,6 @@ class Hash3DOCueCalculator {
     }
   }
 
-  /// Helper method to convert bytes to hex for debugging
-  static String _bytesToHex(List<int> bytes) {
-    return bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join(' ');
-  }
   
   /// Extract the BIN file path from the CUE content
   static String? _extractBinPath(String cueContent, String cuePath) {
@@ -279,19 +217,6 @@ class Hash3DOCueCalculator {
   }
   
   // The rest of the helper methods (similar to the CHD version but adapted for direct file access)
-  static String _extractTitle(Uint8List sectorData, int offset) {
-    if (sectorData.length < offset + 0x48) return '';
-    
-    // Title is at offset 0x28, max 32 bytes
-    final titleBytes = sectorData.sublist(offset + 0x28, offset + 0x28 + 32);
-    
-    // Convert to string and trim nulls/spaces
-    final String title = String.fromCharCodes(titleBytes)
-        .replaceAll(RegExp(r'\u0000.*'), '')
-        .trim();
-    
-    return title;
-  }
   
   static int _getBlockSize(Uint8List header, int offset) {
     // Block size is at offset 0x4C (big-endian)
@@ -327,7 +252,6 @@ class Hash3DOCueCalculator {
     // Calculate sector for the root directory
     int sector = rootBlockLocation ~/ 2048;
     
-    print('Searching for LaunchMe in directory at sector: $sector');
     
     // Read the root directory sector
     while (true) {
@@ -336,7 +260,6 @@ class Hash3DOCueCalculator {
       final bytesRead = await fileHandle.readInto(buffer);
       
       if (bytesRead < sectorSize) {
-        print('Could not read directory sector');
         return null;
       }
       
@@ -348,7 +271,6 @@ class Hash3DOCueCalculator {
                 (buffer[fsOffset + 0x0E] << 8) | 
                 buffer[fsOffset + 0x0F];
       
-      print('Directory entries from offset $offset to $stop');
       
       while (offset < stop) {
         // Check if entry is a file (type 0x02)
@@ -362,15 +284,11 @@ class Hash3DOCueCalculator {
               .replaceAll(RegExp(r'\u0000.*'), '')
               .trim();
           
-          print('Found file: $filename');
           
          if (filename == 'LaunchMe' || filename == 'launchme' || filename == 'launch.me' || filename == 'Launch.Me' || filename == 'launch' || filename == 'Launch' || filename == 'takeme' || filename == 'LAUNCHME' || filename == 'LAUNCH.ME' || filename == 'LAUNCH' || filename == 'Launchme' || filename == 'launchMe'  )  {
             // File found! Extract its information
             
             // File block size at offset 0x0C
-            final fileBlockSize = (buffer[fsOffset + offset + 0x0D] << 16) | 
-                               (buffer[fsOffset + offset + 0x0E] << 8) | 
-                               buffer[fsOffset + offset + 0x0F];
             
             // File block location at offset 0x44
             final fileBlockLocation = (buffer[fsOffset + offset + 0x45] << 16) | 
@@ -382,7 +300,6 @@ class Hash3DOCueCalculator {
                          (buffer[fsOffset + offset + 0x12] << 8) | 
                          buffer[fsOffset + offset + 0x13];
             
-            print('LaunchMe found: blockLocation=$fileBlockLocation, blockSize=$fileBlockSize, fileSize=$fileSize');
             
             return {
               'location': fileBlockLocation * blockSize,
@@ -402,12 +319,10 @@ class Hash3DOCueCalculator {
       
       // No more sectors to search
       if (offset == 0xFFFF) {
-        print('End of directory reached without finding LaunchMe');
         break;
       }
       
       // Get next sector
-      print('Following directory continuation to offset $offset');
       offset *= blockSize;
       sector = (rootBlockLocation + offset) ~/ 2048;
     }
@@ -415,40 +330,4 @@ class Hash3DOCueCalculator {
     return null;
   }
   
-  static Future<crypto.Digest?> _hashFileContents(
-      RandomAccessFile fileHandle, 
-      int sectorSize,
-      int fsOffset,
-      int blockLocation, 
-      int fileSize) async {
-    
-    final md5 = crypto.md5;
-    var digest = md5.convert([]);
-    int sector = blockLocation ~/ 2048;
-    int remaining = fileSize;
-    
-    while (remaining > 0) {
-      await fileHandle.setPosition(sector * sectorSize);
-      final buffer = Uint8List(sectorSize);
-      final bytesRead = await fileHandle.readInto(buffer);
-      
-      if (bytesRead < sectorSize) {
-        print('Could not read file sector');
-        return null;
-      }
-      
-      final bytesToHash = remaining > 2048 ? 2048 : remaining;
-      print('Adding $bytesToHash bytes from sector $sector');
-      
-      final sectorData = buffer.sublist(fsOffset, fsOffset + bytesToHash);
-      
-      // Update digest with this sector
-      digest = md5.convert([...digest.bytes, ...sectorData]);
-      
-      sector++;
-      remaining -= bytesToHash;
-    }
-    
-    return digest;
-  }
 }
