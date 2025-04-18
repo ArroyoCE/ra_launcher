@@ -1,25 +1,35 @@
 // lib/repositories/local_data_repository_impl.dart
 import 'dart:convert';
-import 'dart:io';
 
-import 'package:crypto/crypto.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
-import 'package:path/path.dart' as path;
 import 'package:retroachievements_organizer/models/consoles/all_console_model.dart';
 import 'package:retroachievements_organizer/models/local/hash_model.dart';
 import 'package:retroachievements_organizer/repositories/local_data_repository.dart';
 import 'package:retroachievements_organizer/services/hashing/3DO/hash_3do_main.dart';
-import 'package:retroachievements_organizer/services/hashing/arduboy_hash.dart';
-import 'package:retroachievements_organizer/services/hashing/combined_console_hash_integration.dart';
+import 'package:retroachievements_organizer/services/hashing/PCECD/pcfx_hash_integration.dart';
+import 'package:retroachievements_organizer/services/hashing/PS2/ps2_hash_integration.dart';
+import 'package:retroachievements_organizer/services/hashing/PSP/psp_hash_integration.dart';
+import 'package:retroachievements_organizer/services/hashing/PceCD/pce_cd_hash_integration.dart';
+import 'package:retroachievements_organizer/services/hashing/SegaCD/saturn_hash_integration.dart';
+import 'package:retroachievements_organizer/services/hashing/SegaCD/sega_cd_hash_integration.dart';
+import 'package:retroachievements_organizer/services/hashing/a78_hash_integration.dart';
+import 'package:retroachievements_organizer/services/hashing/arcade_hash_integration.dart';
+import 'package:retroachievements_organizer/services/hashing/arduboy_hash_integration.dart';
+import 'package:retroachievements_organizer/services/hashing/lynx_hash_integration.dart';
+import 'package:retroachievements_organizer/services/hashing/md5_hash_integration.dart';
+import 'package:retroachievements_organizer/services/hashing/n64_hash_integration.dart';
+import 'package:retroachievements_organizer/services/hashing/nds_hash_integration.dart';
+import 'package:retroachievements_organizer/services/hashing/nes_hash_integration.dart';
+import 'package:retroachievements_organizer/services/hashing/pce_hash_integration.dart';
 import 'package:retroachievements_organizer/services/hashing/psx/psx_hash_integration.dart';
+import 'package:retroachievements_organizer/services/hashing/snes_hash_integration.dart';
 import 'package:retroachievements_organizer/services/storage_service.dart';
 
 class LocalDataRepositoryImpl implements LocalDataRepository {
   final StorageService _storageService;
-  final PsxHashIntegration _psxHashIntegration = PsxHashIntegration();
-  final ThreeDOHashIntegration _threeDOHashIntegration = ThreeDOHashIntegration();
-  final combinedConsoleHashIntegration = CombinedConsoleHashIntegration();
+
+
   
   LocalDataRepositoryImpl(this._storageService);
   
@@ -265,11 +275,11 @@ Future<Map<String, dynamic>?> getHashStats(int consoleId) async {
 
   @override
 @override
+@override
 Future<Map<String, String>> hashFilesInFolders(int consoleId, List<String> folders) async {
   final Map<String, String> hashes = {};
   final validExtensions = getFileExtensionsForConsole(consoleId);
   final hashMethod = getHashMethodForConsole(consoleId);
-
   
   // Check if folders list is empty
   if (folders.isEmpty) {
@@ -277,6 +287,77 @@ Future<Map<String, String>> hashFilesInFolders(int consoleId, List<String> folde
   }
 
   try {
+    // Update progress in the UI
+    void updateProgress(int current, int total) {
+      // This can be expanded to update a progress indicator in the UI
+      if (current % 10 == 0 || current == total) {
+        debugPrint('Hashing progress: $current/$total files');
+      }
+    }
+
+
+        // Special case for PSP
+    if (hashMethod == HashMethod.psp) {
+      final pspHashIntegration = PspHashIntegration();
+      final pspHashes = await pspHashIntegration.hashPspFilesInFolders(folders);
+      
+     
+      await saveLocalHashes(consoleId, pspHashes);
+      return pspHashes;
+    }
+
+    // Special case for lynx
+    if (hashMethod == HashMethod.lynx) {
+      final lynxHashIntegration = LynxHashIntegration();
+      final lynxHashes = await lynxHashIntegration.hashLynxFilesInFolders(folders);
+      
+      await saveLocalHashes(consoleId, lynxHashes);
+      return lynxHashes;
+    }
+
+        // Special case Atari7800
+    if (hashMethod == HashMethod.a78) {
+      final a78HashIntegration = A78HashIntegration();
+      final a78Hashes = await a78HashIntegration.hashA78FilesInFolders(folders);
+       // Save the Arduboy hashes
+      await saveLocalHashes(consoleId, a78Hashes);
+      return a78Hashes;
+    }
+
+
+           // Special case for Snes
+    if (hashMethod == HashMethod.snes) {
+      final snesHashIntegration = SnesHashIntegration();
+      final snesHashes = await snesHashIntegration.hashSnesFilesInFolders(folders);
+       // Save the Arduboy hashes
+      await saveLocalHashes(consoleId, snesHashes);
+      return snesHashes;
+    }
+
+
+           // Special case for nes
+    if (hashMethod == HashMethod.nes) {
+      final nesHashIntegration = NesHashIntegration();
+      final nesHashes = await nesHashIntegration.hashNesFilesInFolders(folders);
+       // Save the Arduboy hashes
+      await saveLocalHashes(consoleId, nesHashes);
+      return nesHashes;
+    }
+
+
+           // Special case for pce
+    if (hashMethod == HashMethod.pce) {
+      final pceHashIntegration = PceHashIntegration();
+      final pceHashes = await pceHashIntegration.hashPceFilesInFolders(folders);
+       // Save the Arduboy hashes
+      await saveLocalHashes(consoleId, pceHashes);
+      return pceHashes;
+    }
+
+
+
+
+
     // Special case for Arduboy
     if (hashMethod == HashMethod.arduboy) {
       final arduboyHashIntegration = ArduboyHashIntegration();
@@ -287,49 +368,94 @@ Future<Map<String, String>> hashFilesInFolders(int consoleId, List<String> folde
       return arduboyHashes;
     }
 
-    // Special case for PlayStation - we handle this differently
-    if (hashMethod == HashMethod.psx) {
+       // Special case for Nintendo DS
+    if (hashMethod == HashMethod.nds) {
+      final ndsHashIntegration = NdsHashIntegration();
+      debugPrint('Starting Nintendo DS hashing, this might take some time...');
+      
+      final ndsHashes = await ndsHashIntegration.hashNdsFilesInFolders(
+        folders,
+        progressCallback: updateProgress
+      );
+      
+      // Save the Nintendo DS hashes
+      await saveLocalHashes(consoleId, ndsHashes);
+      return ndsHashes;
+    }
+
+    // Special case for PlayStation 2
+if (hashMethod == HashMethod.ps2) {
+  final ps2HashIntegration = Ps2HashIntegration();
+  debugPrint('Starting PlayStation 2 hashing, this might take some time...');
+  
+  final ps2Hashes = await ps2HashIntegration.hashPs2FilesInFolders(
+    folders,
+    progressCallback: updateProgress
+  );
+  
+  // Save the PlayStation 2 hashes
+  await saveLocalHashes(consoleId, ps2Hashes);
+  return ps2Hashes;
+}
+
+
+ if (hashMethod == HashMethod.pcecd) {
+      final pcecdHashIntegration = PCECDHashIntegration();
       debugPrint('Starting PlayStation hashing, this might take some time...');
       
-      // This will now handle UI updates internally
-      final psxHashes = await _psxHashIntegration.hashPsxFilesInFolders(folders);
+      final pcecdHashes = await pcecdHashIntegration.hashPCECDFilesInFolders(folders);
+      
+      // Save the PlayStation hashes
+      await saveLocalHashes(consoleId, pcecdHashes);
+      return pcecdHashes;
+    }
+
+     if (hashMethod == HashMethod.pcfx) {
+      final pcfxHashIntegration = PCFXHashIntegration();
+      debugPrint('Starting PlayStation hashing, this might take some time...');
+      
+      final pcfxHashes = await pcfxHashIntegration.hashPCFXFilesInFolders(folders);
+      
+      // Save the PlayStation hashes
+      await saveLocalHashes(consoleId, pcfxHashes);
+      return pcfxHashes;
+    }
+
+
+    // Special case for PlayStation
+    if (hashMethod == HashMethod.psx) {
+      final psxHashIntegration = PsxHashIntegration();
+      debugPrint('Starting PlayStation hashing, this might take some time...');
+      
+      final psxHashes = await psxHashIntegration.hashPsxFilesInFolders(folders);
       
       // Save the PlayStation hashes
       await saveLocalHashes(consoleId, psxHashes);
       return psxHashes;
     }
 
+    // Special case for Nintendo 64
+    if (hashMethod == HashMethod.n64) {
+      final n64HashIntegration = N64HashIntegration();
+      debugPrint('Starting Nintendo 64 hashing, this might take some time...');
+      
+      final n64Hashes = await n64HashIntegration.hashN64FilesInFolders(folders);
+      
+      // Save the Nintendo 64 hashes
+      await saveLocalHashes(consoleId, n64Hashes);
+      return n64Hashes;
+    }
+
     // Special case for Arcade
     if (hashMethod == HashMethod.arcade) {
+      final arcadeHashIntegration = ArcadeHashIntegration();
       debugPrint('Starting Arcade hashing, this might take some time...');
-    
-      final Map<String, String> arcadeHashes = {};
-    
-      for (final folderPath in folders) {
-        final directory = Directory(folderPath);
-        
-        if (await directory.exists()) {
-          await for (final entity in directory.list(recursive: true)) {
-            if (entity is File) {
-              final extension = path.extension(entity.path).toLowerCase();
-              
-              // Only process zip and 7z files for arcade
-              if (extension == '.zip' || extension == '.7z') {
-                // Get just the filename without extension
-                final filename = path.basenameWithoutExtension(entity.path);
-                
-                // Hash just the filename
-                final hashBytes = md5.convert(utf8.encode(filename)).bytes;
-                final hash = hashBytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
-                
-                arcadeHashes[entity.path] = hash;
-                debugPrint('Hashed arcade file: ${entity.path} -> $hash');
-              }
-            }
-          }
-        }
-      }
-    
+      
+      final arcadeHashes = await arcadeHashIntegration.hashArcadeFilesInFolders(
+        folders,
+        progressCallback: updateProgress
+      );
+      
       // Save the arcade hashes
       await saveLocalHashes(consoleId, arcadeHashes);
       return arcadeHashes;
@@ -337,109 +463,78 @@ Future<Map<String, String>> hashFilesInFolders(int consoleId, List<String> folde
 
     // Special case for 3DO
     if (hashMethod == HashMethod.threedo) {
+      final threeDOHashIntegration = ThreeDOHashIntegration();
       debugPrint('Starting 3DO hashing, this might take some time...');
       
-      // This will handle UI updates internally
-      final threedoHashes = await _threeDOHashIntegration.hash3DOFilesInFolders(folders);
+      final threedoHashes = await threeDOHashIntegration.hash3DOFilesInFolders(folders);
       
       // Save the 3DO hashes
       await saveLocalHashes(consoleId, threedoHashes);
       return threedoHashes;
     }
     
-    // Add special case for Combined Console hashing method
-    if (hashMethod == HashMethod.combined) {
-      debugPrint('Starting combined console hashing for console $consoleId, this might take some time...');
+// Special case for Sega CD
+  if (hashMethod == HashMethod.segacd) {
+    final segaCDHashIntegration = SegaCDHashIntegration();
+    final segaCDHashes = await segaCDHashIntegration.hashSegaCDFilesInFolders(
+      folders,
+      progressCallback: updateProgress
+    );
+    
+    await saveLocalHashes(consoleId, segaCDHashes);
+    return segaCDHashes;
+  }
+  
+  // Special case for Sega Saturn
+  if (hashMethod == HashMethod.saturn) {
+    final saturnHashIntegration = SegaSaturnHashIntegration();
+    final saturnHashes = await saturnHashIntegration.hashSegaSaturnFilesInFolders(
+      folders,
+      progressCallback: updateProgress
+    );
+    
+    await saveLocalHashes(consoleId, saturnHashes);
+    return saturnHashes;
+  }
+
+    
+    
+    // For MD5 hashing
+    if (hashMethod == HashMethod.md5) {
+      final md5HashIntegration = MD5HashIntegration();
+      debugPrint('Starting MD5 hashing for console $consoleId');
       
-      // Use the CombinedConsoleHashIntegration to handle this console
+      final md5Hashes = await md5HashIntegration.hashFilesInFolders(
+        folders,
+        validExtensions,
+        progressCallback: updateProgress
+      );
       
-      final combinedHashes = await combinedConsoleHashIntegration.hashFilesForConsole(folders, consoleId);
-      
-      // Save the combined console hashes
-      await saveLocalHashes(consoleId, combinedHashes);
-      return combinedHashes;
+      // Save the hashes
+      await saveLocalHashes(consoleId, md5Hashes);
+      return md5Hashes;
     }
     
-    // For other consoles, process files with proper UI updates
-    final List<File> filesToProcess = [];
     
-    // First collect all files to process
-    for (final folderPath in folders) {
-      final directory = Directory(folderPath);
-      
-      if (await directory.exists()) {
-        await for (final entity in directory.list(recursive: true)) {
-          if (entity is File) {
-            final extension = path.extension(entity.path).toLowerCase();
-            
-            // Check if file has a valid extension for this console
-            if (validExtensions.contains(extension)) {
-              filesToProcess.add(entity);
-            }
-          }
-        }
-      }
-    }
-    
-    // Allow UI to update before starting hash process
-    await Future.microtask(() => null);
-    
-    // Process files with yields to UI thread
-    for (int i = 0; i < filesToProcess.length; i++) {
-      final file = filesToProcess[i];
-      
-      try {
-        // Read file as bytes
-        final bytes = await file.readAsBytes();
-        
-        // Hash the file based on console's hash method
-        String fileHash;
-          
-        switch (hashMethod) {
-          case HashMethod.md5:
-            fileHash = md5.convert(bytes).toString();
-            break;
-          case HashMethod.sha1:
-            fileHash = sha1.convert(bytes).toString();
-            break;
-          case HashMethod.crc32:
-            // Implement CRC32 hashing if needed
-            final crc = _calculateCrc32(bytes);
-            fileHash = crc.toRadixString(16).padLeft(8, '0');
-            break;
-          default:
-            fileHash = md5.convert(bytes).toString();
-        }
-        
-        // Store hash with file path
-        hashes[file.path] = fileHash;
-      } catch (e) {
-        debugPrint('Error hashing file ${file.path}: $e');
-      }
-      
-      // Yield to UI thread every few files
-      if (i % 5 == 0) {
-        await Future.microtask(() => null);
-      }
-    }
+    // Default to MD5 if the hash method is unknown
+    debugPrint('Unknown hash method for console $consoleId, defaulting to MD5');
+    final md5HashIntegration = MD5HashIntegration();
+    final defaultHashes = await md5HashIntegration.hashFilesInFolders(
+      folders,
+      validExtensions,
+      progressCallback: updateProgress
+    );
     
     // Save the hashes
-    await saveLocalHashes(consoleId, hashes);
+    await saveLocalHashes(consoleId, defaultHashes);
     
-    return hashes;
+    return defaultHashes;
   } catch (e) {
     debugPrint('Error hashing files: $e');
     return hashes;
   }
 }
 
-// You would need to implement this method for CRC32 if needed
-int _calculateCrc32(Uint8List bytes) {
-  // CRC32 calculation logic here
-  // You might want to implement this or use a package like 'crc32' from pub.dev
-  // For now, returning a placeholder value
-  return 0;
-}
 
   @override
   Future<void> saveLocalHashes(int consoleId, Map<String, String> hashes) async {

@@ -9,8 +9,8 @@ class UserState {
   final String? apiKey;
   final String? errorMessage;
   final bool autoLogin;
-  final UserProfile? userProfile; // Changed from Map<String, dynamic>?
-  final String? userPicPath; // Added userPicPath which was missing
+  final UserProfile? userProfile; 
+  final String? userPicPath; 
 
   const UserState({
     this.isAuthenticated = false,
@@ -23,7 +23,7 @@ class UserState {
     this.userPicPath,
   });
 
-  // Updated copyWith method
+
   UserState copyWith({
     bool? isAuthenticated,
     bool? isLoading,
@@ -46,7 +46,7 @@ class UserState {
     );
   }
 
-  // Updated clearError to maintain all fields
+
   UserState clearError() {
     return UserState(
       isAuthenticated: isAuthenticated,

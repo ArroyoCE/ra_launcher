@@ -201,7 +201,7 @@ class _GamesListState extends ConsumerState<GamesList> {
                 ),
               ),
               
-              // Right chevron to indicate it's clickable
+              
               const Padding(
                 padding: EdgeInsets.only(left: 8),
                 child: Icon(Icons.chevron_right, color: AppColors.primary),

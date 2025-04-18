@@ -5,7 +5,6 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:retroachievements_organizer/constants/constants.dart';
 import 'package:retroachievements_organizer/models/consoles/all_console_model.dart';
-import 'package:retroachievements_organizer/models/local/hash_model.dart';
 import 'package:retroachievements_organizer/providers/states/local_data_state_provider.dart';
 
 class ConsolesGrid extends ConsumerWidget {
@@ -32,13 +31,13 @@ class ConsolesGrid extends ConsumerWidget {
       itemBuilder: (context, index) {
         final console = consoles[index];
         final isSupported = ref.read(isConsoleSupportedProvider(console.id));
-        final hashMethod = ref.read(consoleHashMethodProvider(console.id));
+        ref.read(consoleHashMethodProvider(console.id));
         
         return _buildConsoleCard(
           context: context,
           console: console,
           isSupported: isSupported,
-          hashMethod: hashMethod,
+          
           libraryStats: libraryStats,
         );
       },
@@ -49,7 +48,7 @@ class ConsolesGrid extends ConsumerWidget {
   required BuildContext context,
   required Console console,
   required bool isSupported,
-  required HashMethod hashMethod,
+  
   required Map<int, Map<String, dynamic>> libraryStats,
 }) {
   final hasLibraryStats = libraryStats.containsKey(console.id);
@@ -132,18 +131,6 @@ class ConsolesGrid extends ConsumerWidget {
               maxLines: 2,
               overflow: TextOverflow.ellipsis,
             ),
-            
-            // Display hash method
-            if (isSupported)
-              Text(
-                'Hash: ${hashMethod.name}',
-                style: const TextStyle(
-                  color: AppColors.info,
-                  fontSize: 12,
-                  fontWeight: FontWeight.bold,
-                ),
-                textAlign: TextAlign.center,
-              ),
             
             // Library statistics if available
             if (isSupported)

@@ -1,10 +1,11 @@
-import 'dart:isolate';
 import 'dart:async';
+import 'dart:isolate';
+
 import 'package:flutter/foundation.dart';
 
+import '../psx/psx_filesystem.dart';
+import '../psx/psx_hash.dart';
 import 'chd_read_common.dart';
-import 'psx/psx_filesystem.dart';
-import 'psx/psx_hash.dart';
 
 // Message to send to the isolate
 class ChdProcessRequest {
@@ -40,6 +41,7 @@ class IsolateChdProcessor {
     final isolate = await Isolate.spawn(
       _processChdFileInIsolate,
       ChdProcessRequest(filePath, receivePort.sendPort),
+      debugName: 'CHD Processor',
     );
     
     // Listen for messages from the isolate
@@ -47,7 +49,10 @@ class IsolateChdProcessor {
       if (message is ChdProcessResponse) {
         // Update progress if needed (you can add a progress callback here)
         if (message.progress < 1.0) {
-          debugPrint('Processing CHD: ${(message.progress * 100).toStringAsFixed(1)}%');
+          // Reduce logging frequency to improve performance
+          if (message.progress % 0.2 < 0.01) { // Only log at 0%, 20%, 40%, 60%, 80%
+            
+          }
           return;
         }
         
@@ -105,10 +110,10 @@ class IsolateChdProcessor {
         return;
       }
       
-      // Send progress update
+      // Send progress update - reduced frequency
       sendPort.send(ChdProcessResponse(
         filePath: filePath,
-        progress: 0.3,
+        progress: 0.2,
       ));
       
       // Create the filesystem handler
@@ -124,10 +129,10 @@ class IsolateChdProcessor {
         return;
       }
       
-      // Send progress update
+      // Send progress update - reduced frequency
       sendPort.send(ChdProcessResponse(
         filePath: filePath,
-        progress: 0.6,
+        progress: 0.4,
       ));
       
       // Create a hash calculator and calculate the hash

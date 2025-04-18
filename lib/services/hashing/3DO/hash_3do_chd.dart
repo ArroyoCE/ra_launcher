@@ -3,7 +3,7 @@
 import 'dart:typed_data';
 
 import 'package:crypto/crypto.dart' as crypto;
-import 'package:retroachievements_organizer/services/hashing/chd_read_common.dart';
+import 'package:retroachievements_organizer/services/hashing/CHD/chd_read_common.dart';
 
 /// Hashing implementation for 3DO (Opera filesystem)
 class Hash3DOCalculator {

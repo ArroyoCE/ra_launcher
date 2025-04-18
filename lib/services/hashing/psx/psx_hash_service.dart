@@ -1,16 +1,18 @@
 import 'dart:convert';
 import 'dart:io';
-import 'dart:typed_data';
 
 import 'package:crypto/crypto.dart';
 import 'package:flutter/foundation.dart';
 import 'package:path/path.dart' as path;
-import 'package:retroachievements_organizer/services/hashing/chd_read_common.dart';
+import 'package:retroachievements_organizer/services/hashing/CHD/chd_read_common.dart';
 
-import '../isolate_chd_processor.dart';
+import 'package:retroachievements_organizer/services/hashing/CHD/isolate_chd_processor.dart';
 
 class PsxHashService {
   static final PsxHashService _instance = PsxHashService._internal();
+  
+  // Cache for file paths and hashes to avoid rehashing
+  final Map<String, String> _hashCache = {};
   
   factory PsxHashService() {
     return _instance;
@@ -18,75 +20,68 @@ class PsxHashService {
   
   PsxHashService._internal();
 
-
   Future<String?> hashPsxFile(String filePath) async {
-  try {
-    final extension = path.extension(filePath).toLowerCase();
-    
-    // Add a yield to UI thread at the start
-    await Future.microtask(() => null);
-    
-    // Handle CHD files
-    if (extension == '.chd') {
-      return _hashChdFile(filePath);
+    try {
+      // Check cache first
+      if (_hashCache.containsKey(filePath)) {
+        return _hashCache[filePath];
+      }
+      
+      final extension = path.extension(filePath).toLowerCase();
+      
+      // Handle CHD files
+      if (extension == '.chd') {
+        final hash = await _hashChdFile(filePath);
+        if (hash != null) {
+          _hashCache[filePath] = hash;
+        }
+        return hash;
+      }
+      
+      // Handle CUE files
+      if (extension == '.cue') {
+        final hash = await _hashCueFile(filePath);
+        if (hash != null) {
+          _hashCache[filePath] = hash;
+        }
+        return hash;
+      }
+      
+      // Unknown file type
+      return null;
+    } catch (e) {
+      debugPrint('Error hashing PSX file: $e');
+      return null;
     }
-    
-    // Handle CUE files
-    if (extension == '.cue') {
-      return _hashCueFile(filePath);
-    }
-    
-    // Unknown file type
-    debugPrint('Unsupported file type for PSX hashing: $extension');
-    return null;
-  } catch (e, stackTrace) {
-    debugPrint('Error hashing PSX file: $e');
-    debugPrint('Stack trace: $stackTrace');
-    return null;
   }
-}
-
 
   /// Hash a PlayStation CHD file
-  /// Hash a PlayStation CHD file
-Future<String?> _hashChdFile(String filePath) async {
-  debugPrint('Hashing PlayStation CHD file: $filePath');
-  
-  try {
+  Future<String?> _hashChdFile(String filePath) async {
     // Use the isolate processor instead of processing in the main thread
     return await IsolateChdProcessor.processChd(filePath);
-  } catch (e, stackTrace) {
-    debugPrint('Error hashing CHD file: $e');
-    debugPrint('Stack trace: $stackTrace');
-    return null;
   }
-}
 
   /// Hash a PlayStation CUE/BIN file using the specific algorithm
   Future<String?> _hashCueFile(String filePath) async {
-    debugPrint('Hashing PlayStation CUE file: $filePath');
-    
     try {
       // Parse the CUE file to find the BIN file(s)
       final cueFile = File(filePath);
       if (!await cueFile.exists()) {
-        debugPrint('CUE file does not exist: $filePath');
         return null;
       }
       
+      // Read the entire CUE file at once for better performance
       final cueContent = await cueFile.readAsString();
       final binFiles = _parseCueFileForBins(cueContent, path.dirname(filePath));
       
       if (binFiles.isEmpty) {
-        debugPrint('No BIN files found in CUE file');
         return null;
       }
       
       // Get track information from the CUE file
-      final tracks = await _parseTrackInfo(filePath);
+      final tracks = _parseTrackInfo(cueContent);
       
       if (tracks.isEmpty) {
-        debugPrint('No track information found in CUE file');
         return null;
       }
       
@@ -99,55 +94,38 @@ Future<String?> _hashChdFile(String filePath) async {
       }
       
       return hash;
-    } catch (e, stackTrace) {
+    } catch (e) {
       debugPrint('Error hashing CUE file: $e');
-      debugPrint('Stack trace: $stackTrace');
       return null;
     }
   }
-  
-
   
   /// Parse a CUE file to extract BIN file paths
   List<String> _parseCueFileForBins(String cueContent, String baseDir) {
     final List<String> binFiles = [];
     
-    // Handle different FILE formats (with and without quotes)
-    final RegExp fileRegex1 = RegExp(r'FILE\s+"([^"]+)"\s+BINARY', caseSensitive: false);
-    final RegExp fileRegex2 = RegExp(r'FILE\s+(\S+)\s+BINARY', caseSensitive: false);
+    // Optimized by combining both regex patterns
+    final RegExp fileRegex = RegExp(r'FILE\s+(?:"([^"]+)"|(\S+))\s+BINARY', caseSensitive: false);
     
-    // First try with quotes
-    for (var match in fileRegex1.allMatches(cueContent)) {
-      if (match.groupCount >= 1) {
-        String binFile = match.group(1)!;
+    for (var match in fileRegex.allMatches(cueContent)) {
+      String? binFile = match.group(1) ?? match.group(2);
+      if (binFile != null) {
         binFiles.add(path.join(baseDir, binFile));
       }
     }
     
-    // If no matches, try without quotes
-    if (binFiles.isEmpty) {
-      for (var match in fileRegex2.allMatches(cueContent)) {
-        if (match.groupCount >= 1) {
-          String binFile = match.group(1)!;
-          binFiles.add(path.join(baseDir, binFile));
-        }
-      }
-    }
-    
-    debugPrint('Found ${binFiles.length} BIN files in CUE: $binFiles');
     return binFiles;
   }
   
-  /// Parses the CUE file to extract track information
-  Future<List<TrackInfo>> _parseTrackInfo(String cuePath) async {
+  /// Parses the CUE file to extract track information - optimized to avoid file re-reading
+  List<TrackInfo> _parseTrackInfo(String cueContent) {
     List<TrackInfo> tracks = [];
-    String content = await File(cuePath).readAsString();
     
     // Regular expressions to extract track and index information
     RegExp trackRegex = RegExp(r'TRACK\s+(\d+)\s+(\w+\/\d+|\w+)', caseSensitive: false);
     RegExp indexRegex = RegExp(r'INDEX\s+01\s+(\d+):(\d+):(\d+)', caseSensitive: false);
     
-    List<String> lines = content.split('\n');
+    List<String> lines = cueContent.split('\n');
     
     int currentTrack = 0;
     String currentType = '';
@@ -191,15 +169,15 @@ Future<String?> _hashChdFile(String filePath) async {
         int startSector = (minutes * 60 * 75) + (seconds * 75) + frames;
         
         tracks.add(TrackInfo(
-  number: currentTrack,
-  type: currentType,
-  sectorSize: currentSectorSize,
-  pregap: 0,
-  startFrame: startSector,
-  totalFrames: 0, // You may need to calculate this value
-  dataOffset: _getDataOffset(currentType),
-  dataSize: 2048, // Default for data sectors
-));
+          number: currentTrack,
+          type: currentType,
+          sectorSize: currentSectorSize,
+          pregap: 0,
+          startFrame: startSector,
+          totalFrames: 0, // You may need to calculate this value
+          dataOffset: _getDataOffset(currentType),
+          dataSize: 2048, // Default for data sectors
+        ));
       }
     }
     
@@ -222,247 +200,123 @@ Future<String?> _hashChdFile(String filePath) async {
     }
   }
   
-  /// Calculates the PlayStation hash for a BIN file
+  /// Calculates the PlayStation hash for a BIN file - optimized for performance
   Future<String> _calculatePlayStationHash(String binFilePath, List<TrackInfo> tracks) async {
-  final file = File(binFilePath);
-  final RandomAccessFile binFile = await file.open(mode: FileMode.read);
-  
-  try {
-    // Check if we have track info
-    if (tracks.isEmpty) {
-      throw Exception('No track information available');
-    }
+    final file = File(binFilePath);
+    final RandomAccessFile binFile = await file.open(mode: FileMode.read);
     
-    // Get the first data track info (usually track 1)
-    TrackInfo dataTrack = tracks[0];
-    int sectorSize = dataTrack.sectorSize;
-    int dataOffset = _getDataOffset(dataTrack.type);
-    
-    debugPrint('Using sector size: $sectorSize, data offset: $dataOffset');
-    
-    // The ISO 9660 volume descriptor typically starts at sector 16
-    int vdSector = 16;
-    await binFile.setPosition((vdSector * sectorSize) + dataOffset);
-    
-    // Read the volume descriptor to find the root directory
-    Uint8List sectorBuffer = Uint8List(2048);
-    await binFile.readInto(sectorBuffer);
-    
-    // Yield to UI thread
-    await Future.microtask(() => null);
-    
-    // Verify this is a volume descriptor
-    if (sectorBuffer[0] != 1) {
-      throw Exception('Primary volume descriptor not found at expected location');
-    }
-    
-    // Extract root directory information from the volume descriptor
-    int rootDirLBA = sectorBuffer[158] | (sectorBuffer[159] << 8) | 
-                    (sectorBuffer[160] << 16) | (sectorBuffer[161] << 24);
-    int rootDirSize = sectorBuffer[166] | (sectorBuffer[167] << 8) | 
-                     (sectorBuffer[168] << 16) | (sectorBuffer[169] << 24);
-    
-    debugPrint('Root directory found at sector $rootDirLBA with size $rootDirSize bytes');
-    
-    // Find SYSTEM.CNF in the root directory
-    Uint8List? systemCnfContent = await _findFileInDir(
-      binFile, rootDirLBA, rootDirSize, 'SYSTEM.CNF', sectorSize, dataOffset
-    );
-    
-    // Yield to UI thread
-    await Future.microtask(() => null);
-    
-    String? execPath;
-    
-    if (systemCnfContent == null) {
-        debugPrint('SYSTEM.CNF not found in the disc image, trying fallback methods');
-        
-        // Try finding PSX.EXE directly in the root directory as a fallback
-        debugPrint('Trying to find PSX.EXE in root directory');
-        Uint8List? psxExeContent = await _findFileInDir(
-          binFile, rootDirLBA, rootDirSize, 'PSX.EXE', sectorSize, dataOffset
-        );
-        
-        if (psxExeContent != null) {
-          debugPrint('Found PSX.EXE, using it as executable');
-          execPath = 'PSX.EXE';
-        } else {
-          debugPrint('PSX.EXE not found either, looking for SLUS, SLES or SCUS files');
-          
-          // Scan files in root directory looking for executables
-          int currentPos = rootDirLBA * sectorSize + dataOffset;
-          int bytesRead = 0;
-          int currentSector = rootDirLBA;
-          
-          await binFile.setPosition(currentPos);
-          
-          while (bytesRead < rootDirSize) {
-            // Read record length
-            Uint8List recordLenBuffer = Uint8List(1);
-            int bytesReadNow = await binFile.readInto(recordLenBuffer);
-            
-            if (bytesReadNow == 0 || recordLenBuffer[0] == 0) {
-              // End of sector or padding, move to next sector
-              currentSector++;
-              currentPos = (currentSector * sectorSize) + dataOffset;
-              await binFile.setPosition(currentPos);
-              bytesRead = (currentSector - rootDirLBA) * (sectorSize - dataOffset);
-              continue;
-            }
-            
-            int recordLen = recordLenBuffer[0];
-            
-            // Read directory record
-            Uint8List recordBuffer = Uint8List(recordLen - 1);
-            await binFile.readInto(recordBuffer);
-            
-            bytesRead += recordLen;
-            
-            // Extract file information
-            int fileFlags = recordBuffer[24];
-            int fileNameLen = recordBuffer[31];
-            
-            // Skip if this is a directory (and not a file)
-            bool isDirectory = (fileFlags & 0x02) == 0x02;
-            
-            if (fileNameLen > 0 && !isDirectory) {
-              // Get the filename
-              Uint8List nameBuffer = recordBuffer.sublist(32, 32 + fileNameLen);
-              String entryName = String.fromCharCodes(nameBuffer).toUpperCase();
-              
-              // Remove version number if present
-              int versionIndex = entryName.lastIndexOf(';');
-              if (versionIndex > 0) {
-                entryName = entryName.substring(0, versionIndex);
-              }
-              
-              // Check if it matches PlayStation's standard executable patterns
-              if (entryName.startsWith('SLUS') || 
-                  entryName.startsWith('SLES') || 
-                  entryName.startsWith('SCUS')) {
-                debugPrint('Found potential executable: $entryName');
-                execPath = entryName;
-                break;
-              }
-            }
-          }
-        }
-        
-        if (execPath == null) {
-          throw Exception('Could not find PlayStation executable');
-        }
-      } else {
-        // Parse SYSTEM.CNF content to extract boot path
-        execPath = _extractExecutablePath(systemCnfContent);
-        
-        if (execPath == null) {
-          throw Exception('Primary executable path not found in SYSTEM.CNF');
-        }
+    try {
+      // Check if we have track info
+      if (tracks.isEmpty) {
+        throw Exception('No track information available');
       }
       
- // Yield to UI thread
-    await Future.microtask(() => null);
-
-      debugPrint('Found primary executable path: $execPath');
+      // Get the first data track info (usually track 1)
+      TrackInfo dataTrack = tracks[0];
+      int sectorSize = dataTrack.sectorSize;
+      int dataOffset = _getDataOffset(dataTrack.type);
       
-      // For the hash, we want to include:
-      // 1. The subfolder and filename (if in a subfolder)
-      // 2. The version number (if present)
+      // The ISO 9660 volume descriptor typically starts at sector 16
+      int vdSector = 16;
+      await binFile.setPosition((vdSector * sectorSize) + dataOffset);
       
-      // Start with the full path (preserving original case and structure)
-      String pathForHash = execPath;
+      // Read the volume descriptor to find the root directory
+      Uint8List sectorBuffer = Uint8List(2048);
+      await binFile.readInto(sectorBuffer);
       
-      // Remove cdrom: prefix if present
-      if (pathForHash.toLowerCase().startsWith('cdrom:')) {
-        pathForHash = pathForHash.substring(6);
+      // Verify this is a volume descriptor
+      if (sectorBuffer[0] != 1) {
+        throw Exception('Primary volume descriptor not found at expected location');
       }
       
-      // Ensure we're using backslash for consistency
-      pathForHash = pathForHash.replaceAll('/', '\\');
+      // Extract root directory information from the volume descriptor
+      int rootDirLBA = sectorBuffer[158] | (sectorBuffer[159] << 8) | 
+                     (sectorBuffer[160] << 16) | (sectorBuffer[161] << 24);
+      int rootDirSize = sectorBuffer[166] | (sectorBuffer[167] << 8) | 
+                      (sectorBuffer[168] << 16) | (sectorBuffer[169] << 24);
       
-      // Remove all leading slashes
-      while (pathForHash.startsWith('\\')) {
-        pathForHash = pathForHash.substring(1);
+      // Find executable path - optimize for common patterns
+      String? execPath = await _findExecutablePathQuickly(binFile, rootDirLBA, rootDirSize, sectorSize, dataOffset);
+      
+      if (execPath == null) {
+        throw Exception('Could not find PlayStation executable');
       }
       
-      debugPrint('Using path for hash: $pathForHash');
-      
-      // Normalize the path for lookup in the ISO filesystem
-      String normalizedPath = _normalizeExecutablePath(execPath);
-      
-      // Find and read the primary executable file
-      Uint8List? execContent = await _findFile(
-        binFile, rootDirLBA, rootDirSize, normalizedPath, sectorSize, dataOffset
-      );
-      
-      if (execContent == null) {
-        throw Exception('Primary executable file not found: $normalizedPath');
-      }
-      
-      debugPrint('Found executable file (${execContent.length} bytes)');
-      
-      // Check for PS-X EXE marker and adjust size if needed
-      if (execContent.length >= 8 && 
-          String.fromCharCodes(execContent.sublist(0, 8)) == "PS-X EXE") {
-        // Extract size from header (stored at offset 28)
-        int exeDataSize = execContent[28] | 
-                         (execContent[29] << 8) | 
-                         (execContent[30] << 16) | 
-                         (execContent[31] << 24);
-        // Add 2048 bytes for the header
-        int adjustedSize = exeDataSize + 2048;
-        debugPrint('PS-X EXE marker found, adjusted size from ${execContent.length} to $adjustedSize bytes');
-        
-        if (adjustedSize > execContent.length) {
-          debugPrint('Warning: Calculated size is larger than actual file');
-        } else if (adjustedSize < execContent.length) {
-          // Truncate if we have more data than needed
-          execContent = execContent.sublist(0, adjustedSize);
-        }
-      }
+      // Prepare path for hash
+      String pathForHash = _preparePathForHash(execPath);
       
       // Find the file entity again to get its LBA (Logical Block Address)
       int? executableLBA = await _findFileLBA(
-        binFile, rootDirLBA, rootDirSize, normalizedPath, sectorSize, dataOffset
+        binFile, rootDirLBA, rootDirSize, _normalizeExecutablePath(execPath), sectorSize, dataOffset
       );
       
       if (executableLBA == null) {
         throw Exception('Could not find LBA for executable');
       }
       
-      debugPrint('Executable LBA: $executableLBA');
+      // Get executable size by reading its directory entry
+      int execSize = await _getFileSize(binFile, rootDirLBA, rootDirSize, _normalizeExecutablePath(execPath), sectorSize, dataOffset);
       
       // Calculate number of sectors needed for the executable
-      int execSectors = (execContent.length + 2048 - 1) ~/ 2048; // Ceiling division
-      
-      // The hash combines:
-      // 1. The full path including subfolder (using pathForHash)
-      // 2. The executable data processed sector by sector
+      int execSectors = (execSize + 2048 - 1) ~/ 2048; // Ceiling division
       
       // First, encode the path to ASCII bytes
       List<int> pathBytes = ascii.encode(pathForHash);
-      BytesBuilder buffer = BytesBuilder();
-      buffer.add(pathBytes);
       
-      // Then read the executable by processing each sector individually
-      Uint8List processedExec = await _readFileByProcessingSectors(
+      // Optimize by using a single buffer for the entire operation
+      final combinedLength = pathBytes.length + (execSectors * 2048);
+      final Uint8List buffer = Uint8List(combinedLength);
+      
+      // Copy path bytes to buffer
+      for (int i = 0; i < pathBytes.length; i++) {
+        buffer[i] = pathBytes[i];
+      }
+      
+      // Read the executable data directly into our buffer
+      await _readExecutableData(
         binFile, 
-        executableLBA, 
+        executableLBA,
         execSectors,
         sectorSize,
-        dataOffset
+        dataOffset,
+        buffer,
+        pathBytes.length
       );
       
-      // Add the processed executable data to the buffer
-      buffer.add(processedExec);
-      debugPrint('Final path string for hash: "$pathForHash"');
-
-      // Allow UI to update before calculating the hash
-      await Future.microtask(() => null);
+      // Adjust buffer size if needed (PS-X EXE marker check)
+      bool isAdjusted = false;
+      int finalLength = pathBytes.length + (execSectors * 2048);
+      
+      // Check for PS-X EXE marker
+      if (buffer.length > pathBytes.length + 8) {
+        Uint8List headerCheck = buffer.sublist(pathBytes.length, pathBytes.length + 8);
+        String headerStr = String.fromCharCodes(headerCheck);
+        
+        if (headerStr == "PS-X EXE") {
+          // Extract size from header (stored at offset 28)
+          int exeDataSize = buffer[pathBytes.length + 28] | 
+                           (buffer[pathBytes.length + 29] << 8) | 
+                           (buffer[pathBytes.length + 30] << 16) | 
+                           (buffer[pathBytes.length + 31] << 24);
+          
+          // Add 2048 bytes for the header
+          int adjustedSize = exeDataSize + 2048;
+          
+          // Adjust our buffer size if needed
+          if (adjustedSize < execSectors * 2048) {
+            finalLength = pathBytes.length + adjustedSize;
+            isAdjusted = true;
+          }
+        }
+      }
       
       // Calculate the MD5 hash of the combined data
-      String hash = md5.convert(buffer.toBytes()).toString();
-      debugPrint('Calculated hash: $hash');
+      var digestBytes = isAdjusted 
+          ? md5.convert(buffer.sublist(0, finalLength)).bytes
+          : md5.convert(buffer).bytes;
+      
+      // Convert digest to hex string
+      String hash = digestBytes.map((byte) => byte.toRadixString(16).padLeft(2, '0')).join();
       
       return hash;
     } finally {
@@ -470,84 +324,266 @@ Future<String?> _hashChdFile(String filePath) async {
     }
   }
   
-  /// Reads file sectors in a specific way that processes each sector individually
-  Future<Uint8List> _readFileByProcessingSectors(
-    RandomAccessFile file,
-    int startSector,
-    int sectorCount,
-    int sectorSize,
+  /// Find executable path quickly by trying common patterns first
+  Future<String?> _findExecutablePathQuickly(
+    RandomAccessFile binFile, 
+    int rootDirLBA, 
+    int rootDirSize, 
+    int sectorSize, 
     int dataOffset
   ) async {
-    BytesBuilder builder = BytesBuilder();
+    // First try to find SYSTEM.CNF
+    Uint8List? systemCnfContent = await _findFileInDir(
+      binFile, rootDirLBA, rootDirSize, 'SYSTEM.CNF', sectorSize, dataOffset
+    );
     
-    for (int i = 0; i < sectorCount; i++) {
-      // Calculate the position of this sector in the file
-      int sectorPosition = (startSector + i) * sectorSize;
-      
-      // Skip the header (dataOffset bytes) to get to the actual data
-      await file.setPosition(sectorPosition + dataOffset);
-      
-      // Read 2048 bytes of data from each sector
-      Uint8List sectorData = Uint8List(2048);
-      int bytesRead = await file.readInto(sectorData);
-      
-      // If we couldn't read any data, we're at the end of the file
-      if (bytesRead == 0) {
-        break;
-      }
-      
-      // Add this sector's data to our buffer
-      builder.add(sectorData);
-    }
-    
-    return builder.toBytes();
-  }
-  
-  /// Normalizes a PlayStation executable path for lookup purposes
-  String _normalizeExecutablePath(String path) {
-    String result = path;
-    
-    // Remove cdrom: prefix
-    if (result.toLowerCase().startsWith('cdrom:')) {
-      result = result.substring(6);
-      // Remove ANY number of leading slashes after the cdrom: prefix
-      while (result.startsWith('/') || result.startsWith('\\')) {
-        result = result.substring(1);
+    if (systemCnfContent != null) {
+      // Parse SYSTEM.CNF to extract boot path
+      String? execPath = _extractExecutablePath(systemCnfContent);
+      if (execPath != null) {
+        return execPath;
       }
     }
     
-    // Standardize slashes
-    result = result.replaceAll('\\', '/');
+    // Check for PSX.EXE directly
+    Uint8List? psxExeContent = await _findFileInDir(
+      binFile, rootDirLBA, rootDirSize, 'PSX.EXE', sectorSize, dataOffset
+    );
     
-    // Remove leading slash if present
-    if (result.startsWith('/')) {
-      result = result.substring(1);
+    if (psxExeContent != null) {
+      return 'PSX.EXE';
     }
     
-    // Remove version number if present
-    int versionIndex = result.lastIndexOf(';');
-    if (versionIndex > 0) {
-      result = result.substring(0, versionIndex);
-    }
+    // Look for common PlayStation executable patterns in the root directory
+    // Optimize by loading root directory entries just once
+    List<Map<String, dynamic>> rootEntries = await _loadRootEntries(
+      binFile, rootDirLBA, rootDirSize, sectorSize, dataOffset
+    );
     
-    return result.trim();
-  }
-  
-  /// Extracts the primary executable path from the SYSTEM.CNF file
-  String? _extractExecutablePath(Uint8List systemCnfContent) {
-    // Convert the raw bytes to a string
-    String content = ascii.decode(systemCnfContent, allowInvalid: true);
-    
-    // Parse to extract the primary executable path from the BOOT= line
-    RegExp bootRegExp = RegExp(r'BOOT\s*=\s*(.+?)(?:\s|;|$)', caseSensitive: false);
-    Match? match = bootRegExp.firstMatch(content);
-    
-    if (match != null && match.groupCount >= 1) {
-      return match.group(1)?.trim();
+    // Search for common executable prefixes
+    for (String prefix in ['SLUS', 'SLES', 'SCUS']) {
+      for (var entry in rootEntries) {
+        if (entry['isDirectory'] == false && entry['name'].startsWith(prefix)) {
+          return entry['name'];
+        }
+      }
     }
     
     return null;
   }
+  
+  /// Load root directory entries for faster processing
+  Future<List<Map<String, dynamic>>> _loadRootEntries(
+    RandomAccessFile file,
+    int dirSector,
+    int dirSize,
+    int sectorSize,
+    int dataOffset
+  ) async {
+    List<Map<String, dynamic>> entries = [];
+    int currentPos = dirSector * sectorSize + dataOffset;
+    int bytesRead = 0;
+    int currentSector = dirSector;
+    
+    await file.setPosition(currentPos);
+    
+    while (bytesRead < dirSize) {
+      // Read the length of the directory record
+      Uint8List recordLenBuffer = Uint8List(1);
+      int bytesReadNow = await file.readInto(recordLenBuffer);
+      
+      if (bytesReadNow == 0 || recordLenBuffer[0] == 0) {
+        // End of sector or padding, move to next sector
+        currentSector++;
+        currentPos = (currentSector * sectorSize) + dataOffset;
+        await file.setPosition(currentPos);
+        bytesRead = (currentSector - dirSector) * (sectorSize - dataOffset);
+        continue;
+      }
+      
+      int recordLen = recordLenBuffer[0];
+      
+      // Read the rest of the directory record
+      Uint8List recordBuffer = Uint8List(recordLen - 1);
+      await file.readInto(recordBuffer);
+      
+      bytesRead += recordLen;
+      
+      // Extract file information from the record
+      int fileLBA = recordBuffer[1] | (recordBuffer[2] << 8) | 
+                   (recordBuffer[3] << 16) | (recordBuffer[4] << 24);
+      int fileSize = recordBuffer[9] | (recordBuffer[10] << 8) | 
+                    (recordBuffer[11] << 16) | (recordBuffer[12] << 24);
+      int fileFlags = recordBuffer[24];
+      int fileNameLen = recordBuffer[31];
+      
+      bool isDirectory = (fileFlags & 0x02) == 0x02;
+      
+      if (fileNameLen > 0) {
+        // Get the filename from the record
+        Uint8List nameBuffer = recordBuffer.sublist(32, 32 + fileNameLen);
+        String entryName = String.fromCharCodes(nameBuffer).toUpperCase();
+        
+        // Remove version number if present for comparison
+        int versionIndex = entryName.lastIndexOf(';');
+        if (versionIndex > 0) {
+          entryName = entryName.substring(0, versionIndex);
+        }
+        
+        entries.add({
+          'name': entryName,
+          'lba': fileLBA,
+          'size': fileSize,
+          'isDirectory': isDirectory,
+        });
+      }
+    }
+    
+    return entries;
+  }
+  
+  /// Get file size from root directory entry
+  Future<int> _getFileSize(
+    RandomAccessFile file,
+    int dirSector,
+    int dirSize,
+    String fileName,
+    int sectorSize,
+    int dataOffset
+  ) async {
+    // Convert filename to uppercase for case-insensitive comparison
+    fileName = fileName.toUpperCase();
+    
+    int currentPos = dirSector * sectorSize + dataOffset;
+    int bytesRead = 0;
+    int currentSector = dirSector;
+    
+    await file.setPosition(currentPos);
+    
+    while (bytesRead < dirSize) {
+      // Read the length of the directory record
+      Uint8List recordLenBuffer = Uint8List(1);
+      int bytesReadNow = await file.readInto(recordLenBuffer);
+      
+      if (bytesReadNow == 0 || recordLenBuffer[0] == 0) {
+        // End of sector or padding, move to next sector
+        currentSector++;
+        currentPos = (currentSector * sectorSize) + dataOffset;
+        await file.setPosition(currentPos);
+        bytesRead = (currentSector - dirSector) * (sectorSize - dataOffset);
+        continue;
+      }
+      
+      int recordLen = recordLenBuffer[0];
+      
+      // Read the rest of the directory record
+      Uint8List recordBuffer = Uint8List(recordLen - 1);
+      await file.readInto(recordBuffer);
+      
+      bytesRead += recordLen;
+      
+      // Extract file information from the record
+      int fileSize = recordBuffer[9] | (recordBuffer[10] << 8) | 
+                   (recordBuffer[11] << 16) | (recordBuffer[12] << 24);
+      int fileFlags = recordBuffer[24];
+      int fileNameLen = recordBuffer[31];
+      
+      // Skip if this is a directory (and not a file)
+      bool isDirectory = (fileFlags & 0x02) == 0x02;
+      
+      if (fileNameLen > 0 && !isDirectory) {
+        // Get the filename from the record
+        Uint8List nameBuffer = recordBuffer.sublist(32, 32 + fileNameLen);
+        String entryName = String.fromCharCodes(nameBuffer).toUpperCase();
+        
+        // Remove version number if present for comparison
+        int versionIndex = entryName.lastIndexOf(';');
+        if (versionIndex > 0) {
+          entryName = entryName.substring(0, versionIndex);
+        }
+        
+        // If this is the file we're looking for, return its size
+        if (entryName == fileName) {
+          return fileSize;
+        }
+      }
+    }
+    
+    return 0; // File not found
+  }
+  
+  /// Helper to prepare path for hash calculation
+  String _preparePathForHash(String execPath) {
+    String pathForHash = execPath;
+    
+    // Remove cdrom: prefix if present
+    if (pathForHash.toLowerCase().startsWith('cdrom:')) {
+      pathForHash = pathForHash.substring(6);
+    }
+    
+    // Ensure we're using backslash for consistency
+    pathForHash = pathForHash.replaceAll('/', '\\');
+    
+    // Remove leading slash if present
+    while (pathForHash.startsWith('\\')) {
+      pathForHash = pathForHash.substring(1);
+    }
+    
+    // Make sure the version number is included if it was in the original path
+    if (!pathForHash.contains(';') && execPath.contains(';')) {
+      int versionIndex = execPath.lastIndexOf(';');
+      String versionPart = execPath.substring(versionIndex);
+      pathForHash += versionPart;
+    }
+    
+    return pathForHash;
+  }
+  
+  /// Optimized executable data reader that reads directly into the buffer
+  Future<void> _readExecutableData(
+    RandomAccessFile file,
+    int startSector,
+    int sectorCount,
+    int sectorSize,
+    int dataOffset,
+    Uint8List buffer,
+    int bufferOffset
+  ) async {
+    // Buffer for more efficient reading (read multiple sectors at once)
+    const BATCH_SIZE = 16; // Read 16 sectors at a time
+    final Uint8List sectorBuffer = Uint8List(BATCH_SIZE * sectorSize);
+    
+    for (int i = 0; i < sectorCount; i += BATCH_SIZE) {
+      int sectorsToRead = (i + BATCH_SIZE < sectorCount) ? BATCH_SIZE : (sectorCount - i);
+      
+      // Read a batch of sectors
+      await file.setPosition((startSector + i) * sectorSize);
+      int bytesRead = await file.readInto(sectorBuffer.sublist(0, sectorsToRead * sectorSize));
+      
+      if (bytesRead == 0) break; // End of file
+      
+      // Extract data from each sector and copy to the result buffer
+      for (int j = 0; j < sectorsToRead; j++) {
+        int sectorOffset = j * sectorSize + dataOffset;
+        int targetOffset = bufferOffset + (i + j) * 2048;
+        
+        // Copy 2048 bytes of data or less if we're at the end
+        int bytesToCopy = 2048;
+        if (targetOffset + bytesToCopy > buffer.length) {
+          bytesToCopy = buffer.length - targetOffset;
+        }
+        
+        if (bytesToCopy > 0 && sectorOffset + bytesToCopy <= sectorBuffer.length) {
+          buffer.setRange(
+            targetOffset, 
+            targetOffset + bytesToCopy, 
+            sectorBuffer.sublist(sectorOffset, sectorOffset + bytesToCopy)
+          );
+        }
+      }
+    }
+  }
+  
   /// Finds the Logical Block Address (LBA) of a file in the ISO filesystem
   Future<int?> _findFileLBA(
     RandomAccessFile file,
@@ -681,149 +717,89 @@ Future<String?> _hashChdFile(String filePath) async {
         
         // If this is the file we're looking for
         if (!isDirectory && entryName == fileName) {
-          // Read the file data sector by sector, handling sector boundaries
-          await file.setPosition(fileLBA * sectorSize + dataOffset);
-          Uint8List fileContent = Uint8List(fileSize);
-          
-          int remainingBytes = fileSize;
-          int bufferOffset = 0;
-          int currentFileSector = fileLBA;
-          
-          while (remainingBytes > 0) {
-            // Calculate how many bytes to read from this sector
-            int bytesToRead = remainingBytes > (sectorSize - dataOffset) 
-                ? (sectorSize - dataOffset) 
-                : remainingBytes;
+          // Optimize reading for small files (less than 16KB)
+          if (fileSize < 16384) {
+            // Read small files in a single operation
+            await file.setPosition(fileLBA * sectorSize + dataOffset);
+            Uint8List fileContent = Uint8List(fileSize);
+            await file.readInto(fileContent);
+            return fileContent;
+          } else {
+            // Read larger files in chunks
+            // Use optimized batch reading for better performance
+            await file.setPosition(fileLBA * sectorSize + dataOffset);
+            Uint8List fileContent = Uint8List(fileSize);
             
-            Uint8List sectorData = Uint8List(bytesToRead);
-            await file.readInto(sectorData);
+            int remainingBytes = fileSize;
+            int bufferOffset = 0;
             
-            // Copy this sector's data to the file content buffer
-            fileContent.setRange(bufferOffset, bufferOffset + bytesToRead, sectorData);
+            const BATCH_SIZE = 16384; // 16KB chunks
+            Uint8List batchBuffer = Uint8List(BATCH_SIZE);
             
-            bufferOffset += bytesToRead;
-            remainingBytes -= bytesToRead;
-            
-            if (remainingBytes > 0) {
-              // Move to next sector, accounting for the data offset
-              currentFileSector++;
-              await file.setPosition(currentFileSector * sectorSize + dataOffset);
+            while (remainingBytes > 0) {
+              int bytesToRead = remainingBytes > BATCH_SIZE ? BATCH_SIZE : remainingBytes;
+              
+              int bytesRead = await file.readInto(batchBuffer.sublist(0, bytesToRead));
+              if (bytesRead == 0) break;
+              
+              fileContent.setRange(bufferOffset, bufferOffset + bytesRead, batchBuffer.sublist(0, bytesRead));
+              
+              bufferOffset += bytesRead;
+              remainingBytes -= bytesRead;
             }
+            
+            return fileContent;
           }
-          
-          return fileContent;
         }
       }
     }
     
     return null;
   }
-
-  /// Finds and reads a file at a specific path in the ISO filesystem
-  Future<Uint8List?> _findFile(
-    RandomAccessFile file,
-    int rootDirSector,
-    int rootDirSize,
-    String filePath,
-    int sectorSize,
-    int dataOffset
-  ) async {
-    // Split the path into parts
-    List<String> pathParts = filePath.split('/');
+  
+  /// Extracts the primary executable path from the SYSTEM.CNF file
+  String? _extractExecutablePath(Uint8List systemCnfContent) {
+    // Convert the raw bytes to a string
+    String content = ascii.decode(systemCnfContent, allowInvalid: true);
     
-    // If it's just a file in the root directory
-    if (pathParts.length == 1) {
-      return _findFileInDir(file, rootDirSector, rootDirSize, pathParts[0], sectorSize, dataOffset);
+    // Parse to extract the primary executable path from the BOOT= line
+    RegExp bootRegExp = RegExp(r'BOOT\s*=\s*(.+?)(?:\s|;|$)', caseSensitive: false);
+    Match? match = bootRegExp.firstMatch(content);
+    
+    if (match != null && match.groupCount >= 1) {
+      return match.group(1)?.trim();
     }
     
-    // Handle directories in the path
-    int currentDirSector = rootDirSector;
-    int currentDirSize = rootDirSize;
+    return null;
+  }
+  
+  /// Normalizes a PlayStation executable path for lookup purposes
+  String _normalizeExecutablePath(String path) {
+    String result = path;
     
-    // Navigate through each directory in the path
-    for (int i = 0; i < pathParts.length - 1; i++) {
-      // Find directory entry
-      String dirName = pathParts[i].toUpperCase();
-      
-      // Skip empty path segments
-      if (dirName.isEmpty) continue;
-      
-      bool found = false;
-      int bytesRead = 0;
-      int currentPos = currentDirSector * sectorSize + dataOffset;
-      int currentSector = currentDirSector;
-      
-      await file.setPosition(currentPos);
-      
-      while (bytesRead < currentDirSize) {
-        // Read record length
-        Uint8List recordLenBuffer = Uint8List(1);
-        await file.readInto(recordLenBuffer);
-        
-        if (recordLenBuffer[0] == 0) {
-          // End of sector or padding, move to next sector
-          currentSector++;
-          currentPos = (currentSector * sectorSize) + dataOffset;
-          await file.setPosition(currentPos);
-          bytesRead = (currentSector - currentDirSector) * (sectorSize - dataOffset);
-          continue;
-        }
-        
-        int recordLen = recordLenBuffer[0];
-        
-        // Read directory record
-        Uint8List recordBuffer = Uint8List(recordLen - 1);
-        await file.readInto(recordBuffer);
-        
-        bytesRead += recordLen;
-        
-        // Extract file information
-        int entryLBA = recordBuffer[1] | (recordBuffer[2] << 8) | 
-                      (recordBuffer[3] << 16) | (recordBuffer[4] << 24);
-        int entrySize = recordBuffer[9] | (recordBuffer[10] << 8) | 
-                       (recordBuffer[11] << 16) | (recordBuffer[12] << 24);
-        int entryFlags = recordBuffer[24];
-        int entryNameLen = recordBuffer[31];
-        
-        // Only process directories
-        bool isDirectory = (entryFlags & 0x02) == 0x02;
-        
-        if (entryNameLen > 0 && isDirectory) {
-          Uint8List nameBuffer = recordBuffer.sublist(32, 32 + entryNameLen);
-          String entryName = String.fromCharCodes(nameBuffer).toUpperCase();
-          
-          // Skip . and .. entries (represented by special characters in ISO 9660)
-          if (entryName == '\u0000' || entryName == '\u0001') continue;
-          
-          // Remove version number if present
-          int versionIndex = entryName.lastIndexOf(';');
-          if (versionIndex > 0) {
-            entryName = entryName.substring(0, versionIndex);
-          }
-          
-          if (entryName == dirName) {
-            // Found the directory, update current position for next iteration
-            currentDirSector = entryLBA;
-            currentDirSize = entrySize;
-            found = true;
-            break;
-          }
-        }
-      }
-      
-      if (!found) {
-        return null;  // Directory not found
+    // Remove cdrom: prefix
+    if (result.toLowerCase().startsWith('cdrom:')) {
+      result = result.substring(6);
+      // Remove ANY number of leading slashes after the cdrom: prefix
+      while (result.startsWith('/') || result.startsWith('\\')) {
+        result = result.substring(1);
       }
     }
     
-    // Find the file in the final directory
-    return _findFileInDir(
-        file, 
-        currentDirSector, 
-        currentDirSize, 
-        pathParts.last, 
-        sectorSize, 
-        dataOffset
-    );
+    // Standardize slashes
+    result = result.replaceAll('\\', '/');
+    
+    // Remove leading slash if present
+    if (result.startsWith('/')) {
+      result = result.substring(1);
+    }
+    
+    // Remove version number if present
+    int versionIndex = result.lastIndexOf(';');
+    if (versionIndex > 0) {
+      result = result.substring(0, versionIndex);
+    }
+    
+    return result.trim();
   }
 }
