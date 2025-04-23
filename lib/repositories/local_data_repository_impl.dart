@@ -6,25 +6,43 @@ import 'package:flutter/services.dart';
 import 'package:retroachievements_organizer/models/consoles/all_console_model.dart';
 import 'package:retroachievements_organizer/models/local/hash_model.dart';
 import 'package:retroachievements_organizer/repositories/local_data_repository.dart';
+// Import specialized hash integrations
 import 'package:retroachievements_organizer/services/hashing/3DO/hash_3do_main.dart';
-import 'package:retroachievements_organizer/services/hashing/PCECD/pcfx_hash_integration.dart';
 import 'package:retroachievements_organizer/services/hashing/PS2/ps2_hash_integration.dart';
-import 'package:retroachievements_organizer/services/hashing/PSP/psp_hash_integration.dart';
-import 'package:retroachievements_organizer/services/hashing/PceCD/pce_cd_hash_integration.dart';
-import 'package:retroachievements_organizer/services/hashing/SegaCD/saturn_hash_integration.dart';
-import 'package:retroachievements_organizer/services/hashing/SegaCD/sega_cd_hash_integration.dart';
-import 'package:retroachievements_organizer/services/hashing/a78_hash_integration.dart';
-import 'package:retroachievements_organizer/services/hashing/arcade_hash_integration.dart';
-import 'package:retroachievements_organizer/services/hashing/arduboy_hash_integration.dart';
-import 'package:retroachievements_organizer/services/hashing/lynx_hash_integration.dart';
-import 'package:retroachievements_organizer/services/hashing/md5_hash_integration.dart';
-import 'package:retroachievements_organizer/services/hashing/n64_hash_integration.dart';
-import 'package:retroachievements_organizer/services/hashing/nds_hash_integration.dart';
-import 'package:retroachievements_organizer/services/hashing/nes_hash_integration.dart';
-import 'package:retroachievements_organizer/services/hashing/pce_hash_integration.dart';
+import 'package:retroachievements_organizer/services/hashing/native/unified_hash_service.dart';
 import 'package:retroachievements_organizer/services/hashing/psx/psx_hash_integration.dart';
-import 'package:retroachievements_organizer/services/hashing/snes_hash_integration.dart';
+// Import storage and universal hash service
 import 'package:retroachievements_organizer/services/storage_service.dart';
+
+
+class UniversalHashIntegration {
+  final UnifiedHashService _hashService = UnifiedHashService();
+  
+  Future<Map<String, String>> hashFilesInFolders(
+    List<String> folders,
+    int consoleId,
+    List<String> validExtensions,
+    {Function(int current, int total)? progressCallback}
+  ) async {
+    try {
+      debugPrint('Starting universal hashing for console $consoleId...');
+      
+      final hashes = await _hashService.hashFilesInFolders(
+        consoleId,
+        folders,
+        validExtensions,
+        progressCallback: progressCallback
+      );
+      
+      debugPrint('Hashed ${hashes.length} files for console $consoleId');
+      return hashes;
+    } catch (e) {
+      debugPrint('Error in universal hashing: $e');
+      return {};
+    }
+  }
+}
+
 
 class LocalDataRepositoryImpl implements LocalDataRepository {
   final StorageService _storageService;
@@ -272,9 +290,6 @@ Future<Map<String, dynamic>?> getHashStats(int consoleId) async {
   List<String> getFileExtensionsForConsole(int consoleId) {
     return ConsoleHashMethods.getFileExtensionsForConsole(consoleId);
   }
-
-  @override
-@override
 @override
 Future<Map<String, String>> hashFilesInFolders(int consoleId, List<String> folders) async {
   final Map<String, String> hashes = {};
@@ -295,132 +310,17 @@ Future<Map<String, String>> hashFilesInFolders(int consoleId, List<String> folde
       }
     }
 
-
-        // Special case for PSP
-    if (hashMethod == HashMethod.psp) {
-      final pspHashIntegration = PspHashIntegration();
-      final pspHashes = await pspHashIntegration.hashPspFilesInFolders(folders);
+    // Special case for 3DO
+    if (hashMethod == HashMethod.threedo) {
+      final threeDOHashIntegration = ThreeDOHashIntegration();
+      debugPrint('Starting 3DO hashing, this might take some time...');
       
-     
-      await saveLocalHashes(consoleId, pspHashes);
-      return pspHashes;
-    }
-
-    // Special case for lynx
-    if (hashMethod == HashMethod.lynx) {
-      final lynxHashIntegration = LynxHashIntegration();
-      final lynxHashes = await lynxHashIntegration.hashLynxFilesInFolders(folders);
+      final threedoHashes = await threeDOHashIntegration.hash3DOFilesInFolders(folders);
       
-      await saveLocalHashes(consoleId, lynxHashes);
-      return lynxHashes;
+      // Save the 3DO hashes
+      await saveLocalHashes(consoleId, threedoHashes);
+      return threedoHashes;
     }
-
-        // Special case Atari7800
-    if (hashMethod == HashMethod.a78) {
-      final a78HashIntegration = A78HashIntegration();
-      final a78Hashes = await a78HashIntegration.hashA78FilesInFolders(folders);
-       // Save the Arduboy hashes
-      await saveLocalHashes(consoleId, a78Hashes);
-      return a78Hashes;
-    }
-
-
-           // Special case for Snes
-    if (hashMethod == HashMethod.snes) {
-      final snesHashIntegration = SnesHashIntegration();
-      final snesHashes = await snesHashIntegration.hashSnesFilesInFolders(folders);
-       // Save the Arduboy hashes
-      await saveLocalHashes(consoleId, snesHashes);
-      return snesHashes;
-    }
-
-
-           // Special case for nes
-    if (hashMethod == HashMethod.nes) {
-      final nesHashIntegration = NesHashIntegration();
-      final nesHashes = await nesHashIntegration.hashNesFilesInFolders(folders);
-       // Save the Arduboy hashes
-      await saveLocalHashes(consoleId, nesHashes);
-      return nesHashes;
-    }
-
-
-           // Special case for pce
-    if (hashMethod == HashMethod.pce) {
-      final pceHashIntegration = PceHashIntegration();
-      final pceHashes = await pceHashIntegration.hashPceFilesInFolders(folders);
-       // Save the Arduboy hashes
-      await saveLocalHashes(consoleId, pceHashes);
-      return pceHashes;
-    }
-
-
-
-
-
-    // Special case for Arduboy
-    if (hashMethod == HashMethod.arduboy) {
-      final arduboyHashIntegration = ArduboyHashIntegration();
-      final arduboyHashes = await arduboyHashIntegration.hashArduboyFilesInFolders(folders);
-      
-      // Save the Arduboy hashes
-      await saveLocalHashes(consoleId, arduboyHashes);
-      return arduboyHashes;
-    }
-
-       // Special case for Nintendo DS
-    if (hashMethod == HashMethod.nds) {
-      final ndsHashIntegration = NdsHashIntegration();
-      debugPrint('Starting Nintendo DS hashing, this might take some time...');
-      
-      final ndsHashes = await ndsHashIntegration.hashNdsFilesInFolders(
-        folders,
-        progressCallback: updateProgress
-      );
-      
-      // Save the Nintendo DS hashes
-      await saveLocalHashes(consoleId, ndsHashes);
-      return ndsHashes;
-    }
-
-    // Special case for PlayStation 2
-if (hashMethod == HashMethod.ps2) {
-  final ps2HashIntegration = Ps2HashIntegration();
-  debugPrint('Starting PlayStation 2 hashing, this might take some time...');
-  
-  final ps2Hashes = await ps2HashIntegration.hashPs2FilesInFolders(
-    folders,
-    progressCallback: updateProgress
-  );
-  
-  // Save the PlayStation 2 hashes
-  await saveLocalHashes(consoleId, ps2Hashes);
-  return ps2Hashes;
-}
-
-
- if (hashMethod == HashMethod.pcecd) {
-      final pcecdHashIntegration = PCECDHashIntegration();
-      debugPrint('Starting PlayStation hashing, this might take some time...');
-      
-      final pcecdHashes = await pcecdHashIntegration.hashPCECDFilesInFolders(folders);
-      
-      // Save the PlayStation hashes
-      await saveLocalHashes(consoleId, pcecdHashes);
-      return pcecdHashes;
-    }
-
-     if (hashMethod == HashMethod.pcfx) {
-      final pcfxHashIntegration = PCFXHashIntegration();
-      debugPrint('Starting PlayStation hashing, this might take some time...');
-      
-      final pcfxHashes = await pcfxHashIntegration.hashPCFXFilesInFolders(folders);
-      
-      // Save the PlayStation hashes
-      await saveLocalHashes(consoleId, pcfxHashes);
-      return pcfxHashes;
-    }
-
 
     // Special case for PlayStation
     if (hashMethod == HashMethod.psx) {
@@ -434,101 +334,35 @@ if (hashMethod == HashMethod.ps2) {
       return psxHashes;
     }
 
-    // Special case for Nintendo 64
-    if (hashMethod == HashMethod.n64) {
-      final n64HashIntegration = N64HashIntegration();
-      debugPrint('Starting Nintendo 64 hashing, this might take some time...');
+    // Special case for PlayStation 2
+    if (hashMethod == HashMethod.ps2) {
+      final ps2HashIntegration = Ps2HashIntegration();
+      debugPrint('Starting PlayStation 2 hashing, this might take some time...');
       
-      final n64Hashes = await n64HashIntegration.hashN64FilesInFolders(folders);
-      
-      // Save the Nintendo 64 hashes
-      await saveLocalHashes(consoleId, n64Hashes);
-      return n64Hashes;
-    }
-
-    // Special case for Arcade
-    if (hashMethod == HashMethod.arcade) {
-      final arcadeHashIntegration = ArcadeHashIntegration();
-      debugPrint('Starting Arcade hashing, this might take some time...');
-      
-      final arcadeHashes = await arcadeHashIntegration.hashArcadeFilesInFolders(
+      final ps2Hashes = await ps2HashIntegration.hashPs2FilesInFolders(
         folders,
         progressCallback: updateProgress
       );
       
-      // Save the arcade hashes
-      await saveLocalHashes(consoleId, arcadeHashes);
-      return arcadeHashes;
+      // Save the PlayStation 2 hashes
+      await saveLocalHashes(consoleId, ps2Hashes);
+      return ps2Hashes;
     }
 
-    // Special case for 3DO
-    if (hashMethod == HashMethod.threedo) {
-      final threeDOHashIntegration = ThreeDOHashIntegration();
-      debugPrint('Starting 3DO hashing, this might take some time...');
-      
-      final threedoHashes = await threeDOHashIntegration.hash3DOFilesInFolders(folders);
-      
-      // Save the 3DO hashes
-      await saveLocalHashes(consoleId, threedoHashes);
-      return threedoHashes;
-    }
+    // For all other consoles, use the universal hash integration
+    final universalHashIntegration = UniversalHashIntegration();
+    debugPrint('Using universal hashing for console $consoleId');
     
-// Special case for Sega CD
-  if (hashMethod == HashMethod.segacd) {
-    final segaCDHashIntegration = SegaCDHashIntegration();
-    final segaCDHashes = await segaCDHashIntegration.hashSegaCDFilesInFolders(
+    final universalHashes = await universalHashIntegration.hashFilesInFolders(
       folders,
-      progressCallback: updateProgress
-    );
-    
-    await saveLocalHashes(consoleId, segaCDHashes);
-    return segaCDHashes;
-  }
-  
-  // Special case for Sega Saturn
-  if (hashMethod == HashMethod.saturn) {
-    final saturnHashIntegration = SegaSaturnHashIntegration();
-    final saturnHashes = await saturnHashIntegration.hashSegaSaturnFilesInFolders(
-      folders,
-      progressCallback: updateProgress
-    );
-    
-    await saveLocalHashes(consoleId, saturnHashes);
-    return saturnHashes;
-  }
-
-    
-    
-    // For MD5 hashing
-    if (hashMethod == HashMethod.md5) {
-      final md5HashIntegration = MD5HashIntegration();
-      debugPrint('Starting MD5 hashing for console $consoleId');
-      
-      final md5Hashes = await md5HashIntegration.hashFilesInFolders(
-        folders,
-        validExtensions,
-        progressCallback: updateProgress
-      );
-      
-      // Save the hashes
-      await saveLocalHashes(consoleId, md5Hashes);
-      return md5Hashes;
-    }
-    
-    
-    // Default to MD5 if the hash method is unknown
-    debugPrint('Unknown hash method for console $consoleId, defaulting to MD5');
-    final md5HashIntegration = MD5HashIntegration();
-    final defaultHashes = await md5HashIntegration.hashFilesInFolders(
-      folders,
+      consoleId,
       validExtensions,
       progressCallback: updateProgress
     );
     
     // Save the hashes
-    await saveLocalHashes(consoleId, defaultHashes);
-    
-    return defaultHashes;
+    await saveLocalHashes(consoleId, universalHashes);
+    return universalHashes;
   } catch (e) {
     debugPrint('Error hashing files: $e');
     return hashes;

@@ -1,6 +1,7 @@
 // lib/screens/achievements/components/games_list.dart
 
 import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:retroachievements_organizer/constants/constants.dart';
@@ -60,154 +61,209 @@ class _GamesListState extends ConsumerState<GamesList> {
         borderRadius: BorderRadius.circular(4),
         child: Padding(
           padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-          child: Row(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              // Game icon
-              FutureBuilder<String?>(
-                future: _getGameIcon(gameId, iconPath),
-                builder: (context, snapshot) {
-                  if (snapshot.connectionState == ConnectionState.done && 
-                      snapshot.hasData && 
-                      snapshot.data != null) {
-                    return ClipRRect(
-                      borderRadius: BorderRadius.circular(4),
-                      child: Image.file(
-                        File(snapshot.data!),
-                        width: 64,
-                        height: 64,
-                        fit: BoxFit.cover,
-                        errorBuilder: (context, error, stackTrace) {
-                          debugPrint('Error loading game icon: $error');
-                          return Container(
-                            width: 64,
-                            height: 64,
-                            color: AppColors.darkBackground,
-                            child: const Icon(
-                              Icons.videogame_asset,
-                              color: AppColors.primary,
-                            ),
-                          );
-                        },
-                      ),
-                    );
-                  } else {
-                    return Container(
-                      width: 64,
-                      height: 64,
-                      color: AppColors.darkBackground,
-                      child: const Icon(
-                        Icons.videogame_asset,
-                        color: AppColors.primary,
-                      ),
-                    );
-                  }
-                },
-              ),
-              
-              const SizedBox(width: 16),
-              
-              // Game info
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      title,
-                      style: const TextStyle(
-                        color: AppColors.primary,
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
-                    const SizedBox(height: 4),
-                    Row(
-                      children: [
-                        Text(
-                          'Achievements $numAwarded of $maxPossible',
-                          style: const TextStyle(
-                            color: AppColors.textLight,
-                            fontSize: 12,
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  // Game icon (smaller size)
+                  FutureBuilder<String?>(
+                    future: _getGameIcon(gameId, iconPath),
+                    builder: (context, snapshot) {
+                      if (snapshot.connectionState == ConnectionState.done && 
+                          snapshot.hasData && 
+                          snapshot.data != null) {
+                        return ClipRRect(
+                          borderRadius: BorderRadius.circular(4),
+                          child: Image.file(
+                            File(snapshot.data!),
+                            width: 56,
+                            height: 56,
+                            fit: BoxFit.cover,
+                            errorBuilder: (context, error, stackTrace) {
+                              return Container(
+                                width: 56,
+                                height: 56,
+                                color: AppColors.darkBackground,
+                                child: const Icon(
+                                  Icons.videogame_asset,
+                                  color: AppColors.primary,
+                                ),
+                              );
+                            },
                           ),
+                        );
+                      } else {
+                        return Container(
+                          width: 56,
+                          height: 56,
+                          color: AppColors.darkBackground,
+                          child: const Icon(
+                            Icons.videogame_asset,
+                            color: AppColors.primary,
+                          ),
+                        );
+                      }
+                    },
+                  ),
+                  
+                  const SizedBox(width: 16),
+                  
+                  // Game info
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          children: [
+                            // Game title
+                            Expanded(
+                              child: Text(
+                                title,
+                                style: const TextStyle(
+                                  color: AppColors.primary,
+                                  fontWeight: FontWeight.bold,
+                                ),
+                                maxLines: 2,
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                            ),
+                            
+                            // Award indicator (if any)
+                            if (highestAward.isNotEmpty) 
+                              Padding(
+                                padding: const EdgeInsets.only(left: 8),
+                                child: _buildAwardBadge(highestAward),
+                              ),
+                          ],
                         ),
-                      ],
-                    ),
-                    if (mostRecentDate != null) 
-                      Text(
-                        'Last played: ${_formatDate(mostRecentDate)}',
-                        style: const TextStyle(
-                          color: AppColors.textSubtle,
-                          fontSize: 12,
-                        ),
-                      ),
-                      
-                    // Progress bar
-                    Padding(
-                      padding: const EdgeInsets.only(top: 8),
-                      child: Row(
-                        children: [
-                          Expanded(
-                            child: Container(
-                              height: 20,
+                        
+                        const SizedBox(height: 4),
+                        
+                        // Game metadata row
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          children: [
+                            // Achievement count
+                            Text(
+                              'Achievements $numAwarded of $maxPossible',
+                              style: const TextStyle(
+                                color: AppColors.textLight,
+                                fontSize: 12,
+                              ),
+                            ),
+                            
+                            // Console badge
+                            Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
                               decoration: BoxDecoration(
                                 color: AppColors.darkBackground,
-                                borderRadius: BorderRadius.circular(10),
+                                borderRadius: BorderRadius.circular(4),
                               ),
-                              child: ClipRRect(
-                                borderRadius: BorderRadius.circular(10),
-                                child: LinearProgressIndicator(
-                                  value: percentage / 100,
-                                  backgroundColor: AppColors.darkBackground,
-                                  valueColor: AlwaysStoppedAnimation<Color>(progressColor),
+                              child: Text(
+                                consoleName,
+                                style: const TextStyle(
+                                  color: AppColors.textLight,
+                                  fontSize: 12,
                                 ),
                               ),
                             ),
-                          ),
-                          const SizedBox(width: 8),
-                          Text(
-                            '${percentage.toStringAsFixed(1)}%',
-                            style: TextStyle(
-                              color: progressColor,
-                              fontWeight: FontWeight.bold,
-                            ),
-                          ),
-                          if (highestAward.isNotEmpty) 
-                            Padding(
-                              padding: const EdgeInsets.only(left: 8),
-                              child: Icon(
-                                _getAwardIcon(highestAward),
-                                color: AppColors.primary,
-                                size: 20,
+                          ],
+                        ),
+                        
+                        // Last played date
+                        if (mostRecentDate != null) 
+                          Padding(
+                            padding: const EdgeInsets.only(top: 2),
+                            child: Text(
+                              'Last played: ${_formatDate(mostRecentDate)}',
+                              style: const TextStyle(
+                                color: AppColors.textSubtle,
+                                fontSize: 12,
                               ),
                             ),
-                        ],
+                          ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+              
+              // Progress bar - now in its own row with full width
+              Padding(
+                padding: const EdgeInsets.only(top: 8),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: Container(
+                        height: 16, // Slightly smaller height
+                        decoration: BoxDecoration(
+                          color: AppColors.darkBackground,
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: ClipRRect(
+                          borderRadius: BorderRadius.circular(8),
+                          child: LinearProgressIndicator(
+                            value: percentage / 100,
+                            backgroundColor: AppColors.darkBackground,
+                            valueColor: AlwaysStoppedAnimation<Color>(progressColor),
+                          ),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    // Percentage text
+                    Text(
+                      '${percentage.toStringAsFixed(1)}%',
+                      style: TextStyle(
+                        color: progressColor,
+                        fontWeight: FontWeight.bold,
+                        fontSize: 14,
                       ),
                     ),
                   ],
                 ),
               ),
-              
-              // Console badge
-              Container(
-                padding: const EdgeInsets.all(8),
-                decoration: BoxDecoration(
-                  color: AppColors.darkBackground,
-                  borderRadius: BorderRadius.circular(4),
-                ),
-                child: Text(
-                  consoleName,
-                  style: const TextStyle(
-                    color: AppColors.textLight,
-                    fontSize: 12,
-                  ),
-                ),
-              ),
-              
-              
-              const Padding(
-                padding: EdgeInsets.only(left: 8),
-                child: Icon(Icons.chevron_right, color: AppColors.primary),
-              ),
             ],
           ),
+        ),
+      ),
+    );
+  }
+  
+  // Create a more visually distinct award badge
+  Widget _buildAwardBadge(String awardKind) {
+    IconData icon;
+    Color color;
+    String tooltip;
+    
+    if (awardKind == 'mastery') {
+      icon = Icons.workspace_premium;
+      color = Colors.amber;
+      tooltip = 'Mastered';
+    } else if (awardKind == 'beaten-hardcore') {
+      icon = Icons.military_tech;
+      color = AppColors.success;
+      tooltip = 'Beaten Hardcore';
+    } else {
+      icon = Icons.emoji_events_outlined;
+      color = AppColors.info;
+      tooltip = 'Completed';
+    }
+    
+    return Tooltip(
+      message: tooltip,
+      child: Container(
+        padding: const EdgeInsets.all(4),
+        decoration: BoxDecoration(
+          color: AppColors.darkBackground,
+          borderRadius: BorderRadius.circular(4),
+        ),
+        child: Icon(
+          icon,
+          color: color,
+          size: 16,
         ),
       ),
     );
@@ -241,15 +297,6 @@ class _GamesListState extends ConsumerState<GamesList> {
   }
   
   // Get appropriate award badge icon based on highest award
-  IconData _getAwardIcon(String awardKind) {
-    if (awardKind == 'mastery') {
-      return Icons.workspace_premium;
-    } else if (awardKind == 'beaten-hardcore') {
-      return Icons.military_tech;
-    } else {
-      return Icons.emoji_events_outlined;
-    }
-  }
   
   String _formatDate(DateTime date) {
     return DashboardFormatter.formatDate(date);

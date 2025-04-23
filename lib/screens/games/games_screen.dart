@@ -39,7 +39,7 @@ class _GamesScreenState extends ConsumerState<GamesScreen> with AutomaticKeepAli
   bool _isGridView = true;
   String _searchQuery = '';
   final TextEditingController _searchController = TextEditingController();
-  bool _showOnlyMatched = false;
+  GameMatchFilter _currentMatchFilter = GameMatchFilter.all;
   bool _isLoading = true;
   bool _isHashingInProgress = false;
   List<String> _consoleFolders = [];
@@ -75,28 +75,29 @@ class _GamesScreenState extends ConsumerState<GamesScreen> with AutomaticKeepAli
 }
 
   Future<void> _loadSavedPreferences() async {
-    try {
-      final prefs = await SharedPreferences.getInstance();
-      
-      // Load view preference
-      final savedIsGridView = prefs.getBool('games_grid_view');
-      if (savedIsGridView != null) {
-        setState(() {
-          _isGridView = savedIsGridView;
-        });
-      }
-      
-      // Load filter preference
-      final savedShowOnlyMatched = prefs.getBool('games_show_only_matched');
-      if (savedShowOnlyMatched != null) {
-        setState(() {
-          _showOnlyMatched = savedShowOnlyMatched;
-        });
-      }
-    } catch (e) {
-      debugPrint('Error loading saved preferences: $e');
+  try {
+    final prefs = await SharedPreferences.getInstance();
+    
+    // Load view preference
+    final savedIsGridView = prefs.getBool('games_grid_view');
+    if (savedIsGridView != null) {
+      setState(() {
+        _isGridView = savedIsGridView;
+      });
     }
+    
+    // Load filter preference (changed from bool to int)
+    final savedMatchFilter = prefs.getInt('games_match_filter');
+    if (savedMatchFilter != null) {
+      setState(() {
+        _currentMatchFilter = GameMatchFilter.values[savedMatchFilter];
+      });
+    }
+  } catch (e) {
+    debugPrint('Error loading saved preferences: $e');
   }
+}
+
 
   Future<void> _saveViewPreference() async {
     try {
@@ -108,13 +109,15 @@ class _GamesScreenState extends ConsumerState<GamesScreen> with AutomaticKeepAli
   }
 
   Future<void> _saveFilterPreference() async {
-    try {
-      final prefs = await SharedPreferences.getInstance();
-      await prefs.setBool('games_show_only_matched', _showOnlyMatched);
-    } catch (e) {
-      debugPrint('Error saving filter preference: $e');
-    }
+  try {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setInt('games_match_filter', _currentMatchFilter.index);
+  } catch (e) {
+    debugPrint('Error saving filter preference: $e');
   }
+}
+
+
 
   void _toggleView() {
     setState(() {
@@ -123,12 +126,14 @@ class _GamesScreenState extends ConsumerState<GamesScreen> with AutomaticKeepAli
     _saveViewPreference();
   }
 
-  void _toggleMatchedFilter(bool value) {
-    setState(() {
-      _showOnlyMatched = value;
-    });
-    _saveFilterPreference();
-  }
+  void _handleMatchFilterChange(GameMatchFilter filter) {
+  setState(() {
+    _currentMatchFilter = filter;
+  });
+  _saveFilterPreference();
+}
+
+
 
   Future<void> _loadFolders() async {
     try {
@@ -659,123 +664,129 @@ void _sortGames(List<GameHash> games) {
 
 
   // Filter games based on search and matched filter
-  List<GameHash> _getFilteredGames() {
-    final gamesState = ref.watch(gamesHashesStateProvider);
-    if (gamesState.data == null) return [];
-    
-    // Filter by matched games if needed
-    List<GameHash> filteredList = List.from(gamesState.data!);
-    
-    if (_showOnlyMatched) {
-      // Filter games based on actual match status
-      filteredList = filteredList.where((game) {
-        final status = _matchStatuses[game.id];
+List<GameHash> _getFilteredGames() {
+  final gamesState = ref.watch(gamesHashesStateProvider);
+  if (gamesState.data == null) return [];
+  
+  // Filter by matched games if needed
+  List<GameHash> filteredList = List.from(gamesState.data!);
+  
+  // Apply match filter
+  if (_currentMatchFilter != GameMatchFilter.all) {
+    filteredList = filteredList.where((game) {
+      final status = _matchStatuses[game.id];
+      
+      if (_currentMatchFilter == GameMatchFilter.matched) {
+        // Show games that are in the library (full or partial match)
         return status == MatchStatus.fullMatch || status == MatchStatus.partialMatch;
-      }).toList();
-    }
-    
-    // Filter by search query
-    if (_searchQuery.isNotEmpty) {
-      final query = _searchQuery.toLowerCase();
-      filteredList = filteredList.where((game) => 
-        game.title.toLowerCase().contains(query)).toList();
-    }
-    
-    // Apply sorting
-    _sortGames(filteredList);
-    
-    return filteredList;
+      } else { // GameMatchFilter.unmatched
+        // Show games not in the library
+        return status == MatchStatus.noMatch;
+      }
+    }).toList();
   }
+  
+  // Filter by search query
+  if (_searchQuery.isNotEmpty) {
+    final query = _searchQuery.toLowerCase();
+    filteredList = filteredList.where((game) => 
+      game.title.toLowerCase().contains(query)).toList();
+  }
+  
+  // Apply sorting
+  _sortGames(filteredList);
+  
+  return filteredList;
+}
 
 
 
-
-  @override
-  Widget build(BuildContext context) {
-    super.build(context);
-    
-    final filteredGames = _getFilteredGames();
-    final gamesState = ref.watch(gamesHashesStateProvider);
-    
-    return Card(
-      color: AppColors.cardBackground,
-      elevation: 4,
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            // Header with title and actions
-            GamesHeader(
-  consoleName: widget.consoleName,
-  onViewToggle: _toggleView,
-  onRefresh: _refreshData,
-  isGridView: _isGridView,
-  isHashingInProgress: _isHashingInProgress,  
-),
-            
-            const SizedBox(height: 16),
-            
-            // Folders display
-            FoldersDisplayWidget(
-              folders: _consoleFolders,
-              onAddFolder: _onAddFolder,
-            ),
-            
-            const SizedBox(height: 16),
-            
-            // Search and filters
-            GamesFilters(
-              searchController: _searchController,
-              onSearchChanged: (value) {
-                setState(() {
-                  _searchQuery = value;
-                });
-              },
-              showOnlyMatched: _showOnlyMatched,
-              onFilterChanged: _toggleMatchedFilter,
-              currentSortOption: _currentSortOption, 
-            onSortChanged: _handleSortChange, 
-            ),
-            
-            const SizedBox(height: 16),
-            
-            // Game count and hashing progress
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                Text(
-                  'Showing ${filteredGames.length} games',
-                  style: const TextStyle(
-                    color: AppColors.info,
-                    fontSize: 14,
-                  ),
+ @override
+Widget build(BuildContext context) {
+  super.build(context);
+  
+  final filteredGames = _getFilteredGames();
+  final gamesState = ref.watch(gamesHashesStateProvider);
+  
+  return Card(
+    color: AppColors.cardBackground,
+    elevation: 4,
+    child: Padding(
+      padding: const EdgeInsets.all(16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // Header with title and actions
+          GamesHeader(
+            consoleName: widget.consoleName,
+            onViewToggle: _toggleView,
+            onRefresh: _refreshData,
+            isGridView: _isGridView,
+            isHashingInProgress: _isHashingInProgress,
+          ),
+          
+          const SizedBox(height: 12),
+          
+          // Folders display (now more compact)
+          FoldersDisplayWidget(
+            folders: _consoleFolders,
+            onAddFolder: _onAddFolder,
+          ),
+          
+          const SizedBox(height: 12),
+          
+          // Search and filters in a single row
+          GamesFilters(
+            searchController: _searchController,
+            onSearchChanged: (value) {
+              setState(() {
+                _searchQuery = value;
+              });
+            },
+            currentMatchFilter: _currentMatchFilter,
+            onMatchFilterChanged: _handleMatchFilterChange,
+            currentSortOption: _currentSortOption,
+            onSortChanged: _handleSortChange,
+          ),
+          
+          const SizedBox(height: 12),
+          
+          // Game count and hashing progress
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text(
+                'Showing ${filteredGames.length} games',
+                style: const TextStyle(
+                  color: AppColors.info,
+                  fontSize: 14,
                 ),
-                if (_isHashingInProgress)
-                  const Row(
-                    children: [
-                      SizedBox(
-                        width: 16,
-                        height: 16,
-                        child: CircularProgressIndicator(
-                          strokeWidth: 2,
-                          valueColor: AlwaysStoppedAnimation<Color>(AppColors.primary),
-                        ),
+              ),
+              if (_isHashingInProgress)
+                const Row(
+                  children: [
+                    SizedBox(
+                      width: 16,
+                      height: 16,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2,
+                        valueColor: AlwaysStoppedAnimation<Color>(AppColors.primary),
                       ),
-                      SizedBox(width: 8),
-                      Text(
-                        'Hashing in progress...',
-                        style: TextStyle(
-                          color: AppColors.primary,
-                          fontSize: 12,
-                        ),
+                    ),
+                    SizedBox(width: 8),
+                    Text(
+                      'Hashing in progress...',
+                      style: TextStyle(
+                        color: AppColors.primary,
+                        fontSize: 12,
                       ),
-                    ],
-                  ),
-              ],
-            ),
-            
-            const SizedBox(height: 16),
+                    ),
+                  ],
+                ),
+            ],
+          ),
+          
+          const SizedBox(height: 12),
             
             // Loading indicator or games grid/list
             _isLoading || gamesState.isLoading

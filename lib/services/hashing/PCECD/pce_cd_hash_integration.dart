@@ -23,7 +23,6 @@ class PCECDHashIntegration {
       final directory = Directory(folder);
       if (!await directory.exists()) continue;
       
-      print('Scanning directory: $folder for PC Engine CD games');
       
       await for (final fileEntity in directory.list(recursive: true)) {
         if (fileEntity is File) {
@@ -32,41 +31,33 @@ class PCECDHashIntegration {
           
           if (ext == '.cue') {
             try {
-              print('Processing cue file: $filePath');
               final hash = await hashPCECDFromCue(filePath);
               if (hash != null && hash.isNotEmpty) {
                 hashes[filePath] = hash;
-                print('Successfully hashed PC Engine CD: $filePath => $hash');
               } else {
-                print('Failed to hash PC Engine CD: $filePath');
               }
+            // ignore: empty_catches
             } catch (e) {
-              print('Error processing $filePath: $e');
             }
           } else if (ext == '.chd') {
             try {
               // Check if CHD reader is initialized
               if (!_chdReader.isInitialized) {
-                print('CHD reader not initialized, skipping CHD file: $filePath');
                 continue;
               }
               
-              print('Processing CHD file: $filePath');
               
               // First try hashing normally
               final hash = await _chdHandler.hashPCECDFromChd(filePath);
               if (hash != null && hash.isNotEmpty) {
                 hashes[filePath] = hash;
-                print('Successfully hashed PC Engine CD (CHD): $filePath => $hash');
               } else {
-                print('Failed to hash PC Engine CD (CHD): $filePath');
                 
                 // If normal hashing fails, try debug mode for this file
-                print('Running debug mode for CHD file...');
                 await _chdHandler.debugChdFile(filePath);
               }
+            // ignore: empty_catches
             } catch (e) {
-              print('Error processing CHD file $filePath: $e');
             }
           }
         }
@@ -135,8 +126,6 @@ class PCECDHashIntegration {
                   if (binFile != null) {
                     final binPath = path.isAbsolute(binFile) ? binFile : path.join(cueDir, binFile);
                     
-                    print('Found data track $trackNumber ($trackType) in $binFile');
-                    print('Index offset: $indexOffset sectors');
                     
                     return {
                       'binPath': binPath,
@@ -156,7 +145,6 @@ class PCECDHashIntegration {
     // If no specific data track found, use the first file as a fallback
     if (binFile != null) {
       final binPath = path.isAbsolute(binFile) ? binFile : path.join(cueDir, binFile);
-      print('No data track found, using first file: $binFile');
       return {
         'binPath': binPath,
         'trackNumber': 1,
@@ -172,7 +160,6 @@ class PCECDHashIntegration {
     try {
       final trackInfo = await parseCueFile(cuePath);
       if (trackInfo == null) {
-        print('Could not parse cue file: $cuePath');
         return null;
       }
       
@@ -184,12 +171,10 @@ class PCECDHashIntegration {
       final sectorSize = trackType == 'MODE1/2048' ? 2048 : 2352;
       final dataOffset = trackType == 'MODE1/2048' ? 0 : 16; // Raw has 16-byte header
       
-      print('Opening bin file: $binPath with sector size: $sectorSize');
       
       // Now hash from the bin file
       return await hashPCECDFromBin(binPath, sectorSize, dataOffset, indexOffset, trackType);
     } catch (e) {
-      print('Error in hashPCECDFromCue: $e');
       return null;
     }
   }
@@ -197,7 +182,6 @@ class PCECDHashIntegration {
   // Debug a CHD file to help diagnose issues
   Future<void> debugChdFile(String chdPath) async {
     if (!_chdReader.isInitialized) {
-      print('CHD reader not initialized, cannot debug CHD file.');
       return;
     }
     
@@ -207,7 +191,6 @@ class PCECDHashIntegration {
   Future<String?> hashPCECDFromBin(String binPath, int sectorSize, int dataOffset, int indexOffset, String trackType) async {
     final binFile = File(binPath);
     if (!await binFile.exists()) {
-      print('Bin file does not exist: $binPath');
       return null;
     }
     
@@ -228,7 +211,6 @@ class PCECDHashIntegration {
       final bytesRead = await file.readInto(sectorBuffer);
       
       if (bytesRead < sectorSize) {
-        print('Not enough data read for sector check');
         return null;
       }
       
@@ -236,12 +218,10 @@ class PCECDHashIntegration {
       final dataBuffer = sectorBuffer.sublist(dataOffset);
       
       // Debug print a larger portion around where the marker should be
-      print('Checking for PC Engine CD marker in sector data:');
-      final debugRange = dataBuffer.sublist(0, 100);
-      print('First 100 bytes in hex: ${debugRange.map((b) => b.toRadixString(16).padLeft(2, '0')).join(' ')}');
+      dataBuffer.sublist(0, 100);
       
       // Check for PC Engine CD marker
-      final marker = "PC Engine CD-ROM SYSTEM";
+      const marker = "PC Engine CD-ROM SYSTEM";
       bool isPCECD = false;
       int markerPos = -1;
       
@@ -265,7 +245,6 @@ class PCECDHashIntegration {
       }
       
       if (isPCECD) {
-        print('Found PC Engine CD marker at offset $markerPos!');
         
         // Extract title (22 bytes) at offset 106 from the beginning of the data
         int titleOffset = 106;
@@ -283,9 +262,7 @@ class PCECDHashIntegration {
         final titleBytes = dataBuffer.sublist(titleOffset, titleOffset + 22);
         
         // Title in ASCII
-        final title = String.fromCharCodes(titleBytes.where((b) => b >= 32 && b <= 126)).trim();
-        print('PC Engine CD title: "$title"');
-        print('Title bytes: ${titleBytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join(' ')}');
+        String.fromCharCodes(titleBytes.where((b) => b >= 32 && b <= 126)).trim();
         
         // Determine program sector and size (always at beginning of data)
         final programSector = (dataBuffer[0] << 16) + 
@@ -294,7 +271,6 @@ class PCECDHashIntegration {
                             
         final numSectors = dataBuffer[3];
         
-        print('Program starts at sector $programSector, size: $numSectors sectors');
         
         // Calculate absolute sector position
         final absoluteProgramSector = firstTrackSector + programSector;
@@ -317,7 +293,6 @@ class PCECDHashIntegration {
           final programSectorBuffer = Uint8List(sectorSize);
           final bytesRead = await file.readInto(programSectorBuffer);
           if (bytesRead < sectorSize) {
-            print('Warning: Incomplete read at sector ${absoluteProgramSector + i}');
             break;
           }
           
@@ -335,12 +310,10 @@ class PCECDHashIntegration {
         return hash;
       } 
       else {
-        print('PC Engine CD marker not found, checking for GameExpress CD...');
         // TO DO:
         // Similar code for GameExpress CDs would go here
         // This would involve parsing ISO9660 to find BOOT.BIN
         
-        print('Not a PC Engine CD or GameExpress CD');
         return null;
       }
     } finally {

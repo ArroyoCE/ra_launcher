@@ -2,9 +2,11 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+
 import 'package:crypto/crypto.dart' as crypto;
 import 'package:flutter/foundation.dart';
 import 'package:path/path.dart' as path;
+
 import '../CHD/isolate_chd_processor.dart';
 
 /// Class to handle hashing PS2 files

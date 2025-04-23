@@ -194,24 +194,40 @@ void _handleBack() {
       
       // Tab bar
       PreferredSize(
-        preferredSize: const Size.fromHeight(36.0), // Altura reduzida
-        child: TabBar(
-          controller: _tabController,
-          indicatorColor: AppColors.primary,
-          labelColor: AppColors.primary,
-          unselectedLabelColor: AppColors.textLight,
-          tabs: const [
-            Tab(
-              icon: Icon(Icons.emoji_events, size: 20), // Ícones menores
-              text: 'Achievements',
-            ),
-            Tab(
-              icon: Icon(Icons.tag, size: 20), // Ícones menores
-              text: 'Game Hashes',
-            ),
-          ],
-        ),
+  preferredSize: const Size.fromHeight(18.0), // Reduced height
+  child: TabBar(
+  controller: _tabController,
+  indicatorColor: AppColors.primary,
+  labelColor: AppColors.primary,
+  unselectedLabelColor: AppColors.textLight,
+  labelPadding: const EdgeInsets.symmetric(vertical: 4.0),
+  indicatorSize: TabBarIndicatorSize.label,
+  tabs: const [
+    Tab(
+      height: 18.0,
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Icon(Icons.emoji_events, size: 16),
+          SizedBox(width: 4),
+          Text('Achievements', style: TextStyle(fontSize: 12)),
+        ],
       ),
+    ),
+    Tab(
+      height: 18.0,
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Icon(Icons.tag, size: 16),
+          SizedBox(width: 4),
+          Text('Game Hashes', style: TextStyle(fontSize: 12)),
+        ],
+      ),
+    ),
+  ],
+),
+),
       
       // Tab content
       Expanded(

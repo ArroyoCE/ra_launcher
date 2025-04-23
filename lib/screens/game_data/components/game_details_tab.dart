@@ -7,7 +7,7 @@ import 'package:retroachievements_organizer/models/games/game_extended_model.dar
 import 'package:retroachievements_organizer/providers/states/games/user_game_progress_state_provider.dart';
 import 'package:retroachievements_organizer/screens/game_data/widgets/achievement_item.dart';
 
-class GameDetailsTab extends ConsumerWidget {
+class GameDetailsTab extends ConsumerStatefulWidget {
   final GameExtended? gameExtended;
   final String gameId;
 
@@ -18,8 +18,16 @@ class GameDetailsTab extends ConsumerWidget {
   });
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final userGameProgressState = ref.watch(userGameProgressProvider(gameId));
+  ConsumerState<GameDetailsTab> createState() => _GameDetailsTabState();
+}
+
+class _GameDetailsTabState extends ConsumerState<GameDetailsTab> {
+  bool _hideUnlocked = false;
+  bool _showOnlyMissable = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final userGameProgressState = ref.watch(userGameProgressProvider(widget.gameId));
     
     if (userGameProgressState.isLoading) {
       return const Center(
@@ -42,7 +50,7 @@ class GameDetailsTab extends ConsumerWidget {
     final userGameProgress = userGameProgressState.data;
     
     if (userGameProgress == null) {
-      if (gameExtended == null) {
+      if (widget.gameExtended == null) {
         return const Center(
           child: Text(
             'No detailed information available for this game.',
@@ -55,7 +63,7 @@ class GameDetailsTab extends ConsumerWidget {
       }
       
       // Fall back to game extended data if user progress isn't available
-      final achievements = gameExtended!.getAchievementsList();
+      final achievements = widget.gameExtended!.getAchievementsList();
       
       if (achievements.isEmpty) {
         return const Center(
@@ -70,17 +78,32 @@ class GameDetailsTab extends ConsumerWidget {
       }
       
       // Just show the achievements without user progress
-      return ListView.builder(
-        padding: const EdgeInsets.all(16),
-        itemCount: achievements.length,
-        itemBuilder: (context, index) {
-          final achievement = achievements[index];
-          return AchievementItem(
-            achievement: achievement,
-            isUnlocked: false,
-            numDistinctPlayers: gameExtended?.numDistinctPlayers ?? 0,
-          );
-        },
+      return Column(
+        children: [
+          // Filter options
+          _buildFilterOptions(hasUserProgress: false),
+          // Achievements list
+          Expanded(
+            child: ListView.builder(
+              padding: const EdgeInsets.all(16),
+              itemCount: achievements.length,
+              itemBuilder: (context, index) {
+                final achievement = achievements[index];
+                
+                // Check if we should show this achievement based on filter
+                if (_showOnlyMissable && achievement['type'] != 'missable') {
+                  return const SizedBox.shrink();
+                }
+                
+                return AchievementItem(
+                  achievement: achievement,
+                  isUnlocked: false,
+                  numDistinctPlayers: widget.gameExtended?.numDistinctPlayers ?? 0,
+                );
+              },
+            ),
+          ),
+        ],
       );
     }
     
@@ -100,17 +123,104 @@ class GameDetailsTab extends ConsumerWidget {
     }
 
     // Show achievements with user progress
-    return ListView.builder(
-      padding: const EdgeInsets.all(16),
-      itemCount: achievements.length,
-      itemBuilder: (context, index) {
-        final achievement = achievements[index];
-        return AchievementItem(
-          achievement: achievement,
-          isUnlocked: achievement['isUnlocked'] ?? false,
-          numDistinctPlayers: userGameProgress.numDistinctPlayers,
-        );
-      },
+    return Column(
+      children: [
+        // Filter options
+        _buildFilterOptions(hasUserProgress: true),
+        // Achievements list
+        Expanded(
+          child: ListView.builder(
+            padding: const EdgeInsets.all(16),
+            itemCount: achievements.length,
+            itemBuilder: (context, index) {
+              final achievement = achievements[index];
+              final isUnlocked = achievement['isUnlocked'] ?? false;
+              
+              // Apply filters
+              if (_hideUnlocked && isUnlocked) {
+                return const SizedBox.shrink();
+              }
+              
+              if (_showOnlyMissable && achievement['type'] != 'missable') {
+                return const SizedBox.shrink();
+              }
+              
+              return AchievementItem(
+                achievement: achievement,
+                isUnlocked: isUnlocked,
+                numDistinctPlayers: userGameProgress.numDistinctPlayers,
+              );
+            },
+          ),
+        ),
+      ],
+    );
+  }
+  
+  Widget _buildFilterOptions({required bool hasUserProgress}) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(10, 5, 10, 5),
+      child: Row(
+        children: [
+          const Text(
+            'Filters:',
+            style: TextStyle(
+              color: AppColors.textLight,
+              fontSize: 12,
+            ),
+          ),
+          const SizedBox(width: 8),
+          
+          // "Show only missable" filter (always visible)
+          _buildFilterChip(
+            label: 'Show Only Missable',
+            selected: _showOnlyMissable,
+            onSelected: (value) {
+              setState(() {
+                _showOnlyMissable = value;
+              });
+            },
+          ),
+          
+          const SizedBox(width: 8),
+          
+          // "Hide unlocked" filter (only visible if user has progress)
+          if (hasUserProgress)
+            _buildFilterChip(
+              label: 'Hide Unlocked',
+              selected: _hideUnlocked,
+              onSelected: (value) {
+                setState(() {
+                  _hideUnlocked = value;
+                });
+              },
+            ),
+        ],
+      ),
+    );
+  }
+  
+  Widget _buildFilterChip({
+    required String label,
+    required bool selected,
+    required Function(bool) onSelected,
+  }) {
+    return FilterChip(
+      label: Text(
+        label,
+        style: TextStyle(
+          fontSize: 11,
+          color: selected ? AppColors.textDark : AppColors.textLight,
+        ),
+      ),
+      selected: selected,
+      onSelected: onSelected,
+      selectedColor: AppColors.primary,
+      backgroundColor: AppColors.darkBackground,
+      checkmarkColor: AppColors.textDark,
+      visualDensity: VisualDensity.compact,
+      padding: EdgeInsets.zero,
+      materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
     );
   }
 }

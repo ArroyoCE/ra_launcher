@@ -1,4 +1,4 @@
-// File: lib/3do/hash_3do_cue.dart
+// File: lib/3do/hash_3do.dart (renamed to be more generic)
 
 import 'dart:io';
 import 'dart:typed_data';
@@ -6,20 +6,34 @@ import 'dart:typed_data';
 import 'package:crypto/crypto.dart' as crypto;
 import 'package:path/path.dart' as path;
 
-/// Handler for 3DO CUE files
-class Hash3DOCueCalculator {
+/// Handler for 3DO disc image files (CUE, BIN, ISO)
+class Hash3DOCalculator {
   static const List<int> OPERA_FS_IDENTIFIER = [0x01, 0x5A, 0x5A, 0x5A, 0x5A, 0x5A, 0x01];
   
 
-  /// Calculate hash for a 3DO CUE file
+  /// Calculate hash for a 3DO disc image file
   /// Returns the MD5 hash as a hex string, or null if an error occurs
-  static Future<String?> calculateHash(String cuePath) async {
-    // Parse the CUE file to find the associated BIN file
-    final File cueFile = File(cuePath);
-    if (!await cueFile.exists()) {
+  static Future<String?> calculateHash(String filePath) async {
+    final File sourceFile = File(filePath);
+    if (!await sourceFile.exists()) {
       return null;
     }
     
+    final String fileExtension = path.extension(filePath).toLowerCase();
+    
+    if (fileExtension == '.cue') {
+      return _processCueFile(filePath);
+    } else if (fileExtension == '.bin' || fileExtension == '.iso') {
+      return _processDiscImageFile(filePath);
+    } else {
+      // Unsupported file type
+      return null;
+    }
+  }
+
+  /// Process a CUE file by finding the associated BIN file
+  static Future<String?> _processCueFile(String cuePath) async {
+    final File cueFile = File(cuePath);
     final String cueContent = await cueFile.readAsString();
     final String? binPath = _extractBinPath(cueContent, cuePath);
     
@@ -27,33 +41,45 @@ class Hash3DOCueCalculator {
       return null;
     }
     
-    
-    final File binFile = File(binPath);
-    if (!await binFile.exists()) {
+    return _processDiscImageFile(binPath);
+  }
+  
+  /// Process a disc image file (BIN or ISO)
+  static Future<String?> _processDiscImageFile(String imagePath) async {
+    final File imageFile = File(imagePath);
+    if (!await imageFile.exists()) {
       return null;
     }
     
-    // Open the BIN file and read the first sector
-    final RandomAccessFile binHandle = await binFile.open(mode: FileMode.read);
+    // Default values for BIN/ISO files
+    final Map<String, int> imageInfo = {
+      'mode': 1,        // Default: MODE1
+      'sectorSize': 2352,  // Default: 2352 bytes
+      'dataOffset': 16     // Default: 16 byte offset for MODE1
+    };
+    
+    // For ISO files, we need to adjust these defaults
+    if (path.extension(imagePath).toLowerCase() == '.iso') {
+      imageInfo['sectorSize'] = 2048;  // ISO files are typically 2048 bytes per sector
+      imageInfo['dataOffset'] = 0;     // No header in ISO files
+    }
+    
+    // Open the disc image file and read the first sector
+    final RandomAccessFile imageHandle = await imageFile.open(mode: FileMode.read);
     
     try {
-      // Determine track type and sector size from CUE
-      final trackInfo = _extractTrackInfo(cueContent);
-      final int sectorSize = trackInfo['sectorSize'] ?? 2352;
-      final int dataOffset = trackInfo['mode'] == 1 ? 16 : 0;
-      
+      final int sectorSize = imageInfo['sectorSize']!;
+      final int dataOffset = imageInfo['dataOffset']!;
       
       // Read the first sector to check for Opera filesystem
       final Uint8List sectorData = Uint8List(sectorSize);
-      final int bytesRead = await binHandle.readInto(sectorData);
+      final int bytesRead = await imageHandle.readInto(sectorData);
       
       if (bytesRead < sectorSize) {
         return null;
       }
       
-      // Debug output
-      
-      // First look for the Opera filesystem AFTER the 16-byte sync pattern if MODE1
+      // First look for the Opera filesystem at the expected offset
       bool found = false;
       int fsOffset = 0;
       
@@ -79,15 +105,14 @@ class Hash3DOCueCalculator {
       
       // If still not found, try sector 16 (sometimes used as start sector)
       if (!found) {
-        await binHandle.setPosition(16 * sectorSize);
-        final bytesRead = await binHandle.readInto(sectorData);
+        await imageHandle.setPosition(16 * sectorSize);
+        final bytesRead = await imageHandle.readInto(sectorData);
         
         if (bytesRead < sectorSize) {
           return null;
         }
         
-        
-        // First look for the Opera filesystem AFTER the 16-byte sync pattern if MODE1
+        // First look for the Opera filesystem at the expected offset
         if (dataOffset > 0 && sectorData.length >= dataOffset + OPERA_FS_IDENTIFIER.length) {
           found = _compareBytes(sectorData, dataOffset, 
                             Uint8List.fromList(OPERA_FS_IDENTIFIER), 0, 
@@ -111,21 +136,18 @@ class Hash3DOCueCalculator {
         return null;
       }
       
-      
       // Parse the block size and root directory location from the header
       final blockSize = _getBlockSize(sectorData, fsOffset);
       final rootBlockLocation = _getRootBlockLocation(sectorData, fsOffset) * blockSize;
       
-      
       // Find the LaunchMe file
-      final launchMeInfo = await _findLaunchMeFile(binHandle, sectorSize, fsOffset, rootBlockLocation, blockSize);
+      final launchMeInfo = await _findLaunchMeFile(imageHandle, sectorSize, fsOffset, rootBlockLocation, blockSize);
       if (launchMeInfo == null) {
         return null;
       }
       
       final launchMeLocation = launchMeInfo['location'] as int;
       final launchMeSize = launchMeInfo['size'] as int;
-      
       
       // Create a list to hold all bytes to hash
       final List<int> allBytes = [];
@@ -134,21 +156,19 @@ class Hash3DOCueCalculator {
       allBytes.addAll(sectorData.sublist(fsOffset, fsOffset + 132));
       
       // Then add the LaunchMe file contents
-      
       int sector = launchMeLocation ~/ 2048;
       int remaining = launchMeSize;
       
       while (remaining > 0) {
-        await binHandle.setPosition(sector * sectorSize);
+        await imageHandle.setPosition(sector * sectorSize);
         final buffer = Uint8List(sectorSize);
-        final bytesRead = await binHandle.readInto(buffer);
+        final bytesRead = await imageHandle.readInto(buffer);
         
         if (bytesRead < sectorSize) {
           return null;
         }
         
         final bytesToHash = remaining > 2048 ? 2048 : remaining;
-        
         final sectorData = buffer.sublist(fsOffset, fsOffset + bytesToHash);
         
         // Add data to the list
@@ -165,11 +185,10 @@ class Hash3DOCueCalculator {
       return finalDigest.toString();
       
     } finally {
-      await binHandle.close();
+      await imageHandle.close();
     }
   }
 
-  
   /// Extract the BIN file path from the CUE content
   static String? _extractBinPath(String cueContent, String cuePath) {
     final RegExp fileRegex = RegExp(r'FILE\s+"([^"]+)"\s+BINARY', caseSensitive: false);
@@ -189,35 +208,8 @@ class Hash3DOCueCalculator {
     return binFileName;
   }
   
-  /// Extract track information from the CUE content
-  static Map<String, int> _extractTrackInfo(String cueContent) {
-    final RegExp trackRegex = RegExp(r'TRACK\s+01\s+MODE([12])/(\d+)', caseSensitive: false);
-    final match = trackRegex.firstMatch(cueContent);
-    
-    final result = <String, int>{
-      'mode': 1,      // Default: MODE1
-      'sectorSize': 2352  // Default: 2352 bytes
-    };
-    
-    if (match != null) {
-      result['mode'] = int.parse(match.group(1)!);
-      result['sectorSize'] = int.parse(match.group(2)!);
-      
-      // For MODE1, data starts after 16-byte header
-      if (result['mode'] == 1) {
-        result['dataOffset'] = 16;
-        result['dataSize'] = 2048;
-      } else {
-        result['dataOffset'] = 0;
-        result['dataSize'] = result['sectorSize']!;
-      }
-    }
-    
-    return result;
-  }
   
-  // The rest of the helper methods (similar to the CHD version but adapted for direct file access)
-  
+  // Helper methods remain the same
   static int _getBlockSize(Uint8List header, int offset) {
     // Block size is at offset 0x4C (big-endian)
     return (header[offset + 0x4D] << 16) | (header[offset + 0x4E] << 8) | header[offset + 0x4F];
@@ -252,7 +244,6 @@ class Hash3DOCueCalculator {
     // Calculate sector for the root directory
     int sector = rootBlockLocation ~/ 2048;
     
-    
     // Read the root directory sector
     while (true) {
       await fileHandle.setPosition(sector * sectorSize);
@@ -271,7 +262,6 @@ class Hash3DOCueCalculator {
                 (buffer[fsOffset + 0x0E] << 8) | 
                 buffer[fsOffset + 0x0F];
       
-      
       while (offset < stop) {
         // Check if entry is a file (type 0x02)
         if (buffer[fsOffset + offset + 0x03] == 0x02) {
@@ -284,11 +274,11 @@ class Hash3DOCueCalculator {
               .replaceAll(RegExp(r'\u0000.*'), '')
               .trim();
           
-          
-         if (filename == 'LaunchMe' || filename == 'launchme' || filename == 'launch.me' || filename == 'Launch.Me' || filename == 'launch' || filename == 'Launch' || filename == 'takeme' || filename == 'LAUNCHME' || filename == 'LAUNCH.ME' || filename == 'LAUNCH' || filename == 'Launchme' || filename == 'launchMe'  )  {
+          if (filename == 'LaunchMe' || filename == 'launchme' || filename == 'launch.me' || 
+              filename == 'Launch.Me' || filename == 'launch' || filename == 'Launch' || 
+              filename == 'takeme' || filename == 'LAUNCHME' || filename == 'LAUNCH.ME' || 
+              filename == 'LAUNCH' || filename == 'Launchme' || filename == 'launchMe')  {
             // File found! Extract its information
-            
-            // File block size at offset 0x0C
             
             // File block location at offset 0x44
             final fileBlockLocation = (buffer[fsOffset + offset + 0x45] << 16) | 
@@ -299,7 +289,6 @@ class Hash3DOCueCalculator {
             final fileSize = (buffer[fsOffset + offset + 0x11] << 16) | 
                          (buffer[fsOffset + offset + 0x12] << 8) | 
                          buffer[fsOffset + offset + 0x13];
-            
             
             return {
               'location': fileBlockLocation * blockSize,
@@ -329,5 +318,4 @@ class Hash3DOCueCalculator {
     
     return null;
   }
-  
 }

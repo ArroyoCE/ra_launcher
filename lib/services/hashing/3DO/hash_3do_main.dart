@@ -6,6 +6,7 @@ import 'package:retroachievements_organizer/services/hashing/3do/hash_3do_cue.da
 import 'package:retroachievements_organizer/services/hashing/3do/isolate_3do_chd_processor.dart';
 
 /// Class to handle 3DO hashing operations
+/// Class to handle 3DO hashing operations
 class ThreeDOHashIntegration {
   /// Hash 3DO files in multiple folders
   /// Returns a map of file paths to their hashes
@@ -24,8 +25,8 @@ class ThreeDOHashIntegration {
           final filePath = entity.path;
           final extension = filePath.toLowerCase().split('.').last;
           
-          // Only process CHD or CUE files
-          if (extension == 'chd' || extension == 'cue') {
+          // Process CHD, CUE, BIN, and ISO files
+          if (extension == 'chd' || extension == 'cue' || extension == 'bin' || extension == 'iso') {
             // Calculate hash for the file
             final hash = await Hash3DO.calculateHash(filePath);
             
@@ -43,7 +44,7 @@ class ThreeDOHashIntegration {
 
 /// Main class to calculate 3DO hashes
 class Hash3DO {
-  /// Calculate hash for a 3DO disc (supports both CHD and CUE formats)
+  /// Calculate hash for a 3DO disc (supports CHD, CUE, BIN, and ISO formats)
   /// Returns the MD5 hash as a hex string, or null if an error occurs
   static Future<String?> calculateHash(String filePath) async {
     final extension = filePath.toLowerCase().split('.').last;
@@ -54,7 +55,10 @@ class Hash3DO {
         return Isolate3DOChdProcessor.processChd(filePath);
         
       case 'cue':
-        return Hash3DOCueCalculator.calculateHash(filePath);
+      case 'bin':
+      case 'iso':
+        // Use the unified hash calculator for CUE, BIN and ISO files
+        return Hash3DOCalculator.calculateHash(filePath);
         
       default:
         return null;

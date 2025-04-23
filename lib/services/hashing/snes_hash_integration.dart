@@ -1,5 +1,7 @@
 import 'dart:io';
 import 'dart:isolate';
+import 'dart:math';
+
 import 'package:crypto/crypto.dart';
 import 'package:flutter/foundation.dart';
 import 'package:path/path.dart' as path;
@@ -15,14 +17,15 @@ class SnesHashIntegration {
   bool _poolInitialized = false;
 
   /// Initialize the compute pool
-  Future<void> _ensurePoolInitialized() async {
-    if (!_poolInitialized) {
-      final int isolateCount = max(1, Platform.numberOfProcessors - 1); // Leave one core free for UI
-      _computePool = ComputePool(isolateCount);
-      await _computePool.initialize();
-      _poolInitialized = true;
-    }
+Future<void> _ensurePoolInitialized() async {
+  if (!_poolInitialized) {
+    // More adaptive worker count based on file count and system capabilities
+    final int isolateCount = max(2, min(Platform.numberOfProcessors - 1, 8));
+    _computePool = ComputePool(isolateCount);
+    await _computePool.initialize();
+    _poolInitialized = true;
   }
+}
 
   /// Process SNES files in parallel using compute pool
   Future<Map<String, String>> hashSnesFilesInFolders(List<String> folders) async {
@@ -240,11 +243,14 @@ class ComputePool {
     return combinedHashes;
   }
   
-  Future<Map<String, String>> _processChunk(SendPort port, List<File> files, int batchSize) async {
-    final ReceivePort responsePort = ReceivePort();
-    port.send([files, responsePort.sendPort, batchSize]);
-    return await responsePort.first as Map<String, String>;
-  }
+Future<Map<String, String>> _processChunk(SendPort port, List<File> files, int batchSize) async {
+  // Pre-sort files by size before sending to isolate
+  files.sort((a, b) => a.lengthSync().compareTo(b.lengthSync()));
+  
+  final ReceivePort responsePort = ReceivePort();
+  port.send([files, responsePort.sendPort, batchSize]);
+  return await responsePort.first as Map<String, String>;
+}
   
   void dispose() {
     for (final isolate in _isolates) {
@@ -254,48 +260,70 @@ class ComputePool {
     _sendPorts.clear();
   }
   
-  static void _isolateEntryPoint(SendPort mainSendPort) {
-    final ReceivePort receivePort = ReceivePort();
-    mainSendPort.send(receivePort.sendPort);
+ static void _isolateEntryPoint(SendPort mainSendPort) {
+  final ReceivePort receivePort = ReceivePort();
+  mainSendPort.send(receivePort.sendPort);
+  
+  // Preallocate a buffer for file reading
+  Uint8List? reuseBuffer;
+  
+  receivePort.listen((message) async {
+    final List<File> files = message[0] as List<File>;
+    final SendPort sendPort = message[1] as SendPort;
+    final int batchSize = message.length > 2 ? message[2] as int : SnesHashIntegration.batchSize;
     
-    receivePort.listen((message) async {
-      final List<File> files = message[0] as List<File>;
-      final SendPort sendPort = message[1] as SendPort;
-      final int batchSize = message.length > 2 ? message[2] as int : SnesHashIntegration.batchSize;
+    final Map<String, String> batchHashes = {};
+    final hasher = SnesHashIntegration();
+    
+    // Process files in batches for better memory management
+    for (int i = 0; i < files.length; i += batchSize) {
+      final end = i + batchSize > files.length 
+          ? files.length 
+          : i + batchSize;
       
-      final Map<String, String> batchHashes = {};
-      final hasher = SnesHashIntegration();
+      final batch = files.sublist(i, end);
       
-      // Process files in batches for better memory management
-      for (int i = 0; i < files.length; i += batchSize) {
-        final end = i + batchSize > files.length 
-            ? files.length 
-            : i + batchSize;
-        
-        final batch = files.sublist(i, end);
-        
-        // Sort by file size to process similar-sized files together
-        // This can help with cache locality and memory management
-        batch.sort((a, b) => a.lengthSync().compareTo(b.lengthSync()));
-        
-        // Process batch
-        for (final file in batch) {
-          try {
-            final bytes = await file.readAsBytes();
-            final fileHash = await hasher.hashSNES(bytes);
-            
-            if (fileHash != null) {
-              batchHashes[file.path] = fileHash;
-            }
-          } catch (_) {
-            // Ignore hashing errors
+      // Sort by file size to process similar-sized files together
+      batch.sort((a, b) => a.lengthSync().compareTo(b.lengthSync()));
+      
+      // Process batch - REPLACE THIS ENTIRE LOOP
+      for (final file in batch) {
+        try {
+          // Allocate or resize buffer if needed
+          final fileSize = file.lengthSync();
+          if (reuseBuffer == null || reuseBuffer!.length < fileSize) {
+            reuseBuffer = Uint8List(fileSize);
           }
+          
+          // Read file into buffer
+          final bytes = await _readFileIntoBuffer(file, reuseBuffer!, fileSize);
+          final fileHash = await hasher.hashSNES(bytes);
+          
+          if (fileHash != null) {
+            batchHashes[file.path] = fileHash;
+          }
+        } catch (_) {
+          // Ignore hashing errors
         }
       }
-      
-      sendPort.send(batchHashes);
-    });
+    }
+    
+    sendPort.send(batchHashes);
+  });
+}
+
+// Add this helper method in the same class
+static Future<Uint8List> _readFileIntoBuffer(File file, Uint8List buffer, int fileSize) async {
+  final RandomAccessFile raf = await file.open(mode: FileMode.read);
+  try {
+    await raf.readInto(buffer, 0, fileSize);
+    return buffer.sublist(0, fileSize);
+  } finally {
+    await raf.close();
   }
+}
+
+
 }
 
 // Add max function if not available

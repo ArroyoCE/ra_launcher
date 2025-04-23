@@ -19,7 +19,9 @@ enum HashMethod {
   saturn,
   segacd,
   pcecd,
-  pcfx
+  pcfx,
+  dc,
+  ngcd,
 }
 
 /// Extension to provide string representation of hash methods
@@ -62,6 +64,10 @@ extension HashMethodExtension on HashMethod {
         return 'PCE CD';
       case HashMethod.pcfx:
         return 'PC FX';
+      case HashMethod.dc:
+        return 'DREAMCAST';
+      case HashMethod.ngcd:
+        return 'NEO GEO CD';
       default:
         return 'MD5';
     }
@@ -106,6 +112,7 @@ class ConsoleHashMethods {
     38: HashMethod.md5, // Apple II
     39: HashMethod.saturn, //Saturn
     41: HashMethod.psp, //PSP
+    40: HashMethod.dc, //Dreamcast
     43: HashMethod.threedo, // 3DO
     44: HashMethod.md5, // ColecoVision
     45: HashMethod.md5, // Intellivision
@@ -113,6 +120,7 @@ class ConsoleHashMethods {
     47: HashMethod.md5, // NEC PC-8000
     49: HashMethod.pcfx, //PC-FX
     53: HashMethod.md5, // Wonderswan
+    56: HashMethod.ngcd, //Neo Geo CD
     57: HashMethod.md5, // Fairchild
     63: HashMethod.md5, // Watara
     69: HashMethod.md5, // Mega Duck
@@ -166,7 +174,7 @@ static final Map<int, List<String>> consoleFileExtensions = {
   //NDS
   18: ['.nds', '.dsi', '.ids'],
   //PS2
-  21: ['.bin'],
+  21: ['.bin', '.chd', '.iso', '.img', '.cue'],
   // Magnavox
   23: ['.bin', '.iso', '.chd'],
   // Pokemon Mini
@@ -187,10 +195,12 @@ static final Map<int, List<String>> consoleFileExtensions = {
   38: ['.dsk', '.woz', '.nib'],
   //Saturn
   39: ['.chd', '.bin', '.iso'],
+  //DREAMCAST
+  40: ['.chd', '.gdi', '.cue', '.cdi'],
   //PSP
   41: ['.bin', '.iso', '.chd'],
    // 3DO
-  43: ['.cue', '.chd'],
+  43: ['.cue', '.chd', '.iso'],
   // ColecoVision
   44: ['.col', '.bin'],
   // Intellivision
@@ -203,6 +213,8 @@ static final Map<int, List<String>> consoleFileExtensions = {
   49: ['.iso', '.bin', '.img', '.chd'],
   // Wonderswan
   53: ['.bin', '.ws', '.wsc'],
+  //Neo Geo CD
+  56: ['.chd', '.cue', '.bin', '.iso', '.img'],
   // Fairchild
   57: ['.bin'],
   // Watara
