@@ -8,9 +8,16 @@ import 'package:retroachievements_organizer/models/local/hash_model.dart';
 import 'package:retroachievements_organizer/repositories/local_data_repository.dart';
 // Import specialized hash integrations
 import 'package:retroachievements_organizer/services/hashing/3DO/hash_3do_main.dart';
+import 'package:retroachievements_organizer/services/hashing/DC/dreamcast_hash_integration.dart';
+import 'package:retroachievements_organizer/services/hashing/PCECD/pce_cd_hash_integration.dart';
+import 'package:retroachievements_organizer/services/hashing/PCFX/pcfx_hash_integration.dart';
 import 'package:retroachievements_organizer/services/hashing/PS2/ps2_hash_integration.dart';
+import 'package:retroachievements_organizer/services/hashing/PSP/psp_hash_integration.dart';
+import 'package:retroachievements_organizer/services/hashing/SegaCD/sega_cd_hash_integration.dart';
 import 'package:retroachievements_organizer/services/hashing/native/unified_hash_service.dart';
+import 'package:retroachievements_organizer/services/hashing/pce_hash_integration.dart';
 import 'package:retroachievements_organizer/services/hashing/psx/psx_hash_integration.dart';
+import 'package:retroachievements_organizer/services/hashing/snes_hash_integration.dart';
 // Import storage and universal hash service
 import 'package:retroachievements_organizer/services/storage_service.dart';
 
@@ -310,6 +317,47 @@ Future<Map<String, String>> hashFilesInFolders(int consoleId, List<String> folde
       }
     }
 
+
+    // Special case for Sega CD
+    if (hashMethod == HashMethod.segacd) {
+      final segacdHashIntegration = SegaCDHashIntegration();
+      debugPrint('Starting Sega CD hashing, this might take some time...');
+      
+      final segacdHashes = await segacdHashIntegration.hashSegaCDFilesInFolders(folders);
+      
+      // Save the Sega CD hashes
+      await saveLocalHashes(consoleId, segacdHashes);
+      return segacdHashes;
+    }
+
+    // Special case for PSP
+    if (hashMethod == HashMethod.psp) {
+      final pspHashIntegration = PspHashIntegration();
+      debugPrint('Starting PSP hashing, this might take some time...');
+      
+      final pspHashes = await pspHashIntegration.hashPspFilesInFolders(folders);
+      
+      // Save the PSP hashes
+      await saveLocalHashes(consoleId, pspHashes);
+      return pspHashes;
+    }
+
+
+
+    // Special case for Snes
+    if (hashMethod == HashMethod.snes) {
+      final snesHashIntegration = SnesHashIntegration();
+      debugPrint('Starting Snes hashing, this might take some time...');
+      
+      final snesHashes = await snesHashIntegration.hashSnesFilesInFolders(folders);
+      
+      // Save the SNES hashes
+      await saveLocalHashes(consoleId, snesHashes);
+      return snesHashes;
+    }
+
+
+
     // Special case for 3DO
     if (hashMethod == HashMethod.threedo) {
       final threeDOHashIntegration = ThreeDOHashIntegration();
@@ -321,6 +369,58 @@ Future<Map<String, String>> hashFilesInFolders(int consoleId, List<String> folde
       await saveLocalHashes(consoleId, threedoHashes);
       return threedoHashes;
     }
+
+    //Special Case for PCFX
+    if (hashMethod == HashMethod.pcfx) {
+      final pcfxHashIntegration = PCFXHashIntegration();
+      debugPrint('Starting PC Engine CD hashing, this might take some time...');
+      
+      final pcfxHashes = await pcfxHashIntegration.hashPCFXFilesInFolders(folders);
+      
+      // Save the PCFX hashes
+      await saveLocalHashes(consoleId, pcfxHashes);
+      return pcfxHashes;
+    }
+
+
+     // Special case for Dreamcast
+    if (hashMethod == HashMethod.dc) {
+      final dcHashIntegration = DreamcastHashIntegration();
+      debugPrint('Starting PC Engine hashing, this might take some time...');
+      
+      final dcHashes = await dcHashIntegration.hashDreamcastFilesInFolders(folders);
+      
+      // Save the PC Engine hashes
+      await saveLocalHashes(consoleId, dcHashes);
+      return dcHashes;
+    }
+
+
+    // Special case for PC Engine
+    if (hashMethod == HashMethod.pce) {
+      final pceHashIntegration = PceHashIntegration();
+      debugPrint('Starting PC Engine hashing, this might take some time...');
+      
+      final pceHashes = await pceHashIntegration.hashPceFilesInFolders(folders);
+      
+      // Save the PC Engine hashes
+      await saveLocalHashes(consoleId, pceHashes);
+      return pceHashes;
+    }
+
+
+   // Special case for PC Engine CD
+    if (hashMethod == HashMethod.pcecd) {
+      final pcecdHashIntegration = PCECDHashIntegration();
+      debugPrint('Starting PC Engine CD hashing, this might take some time...');
+      
+      final pcecdHashes = await pcecdHashIntegration.hashPCECDFilesInFolders(folders);
+      
+      // Save the PC Engine CD hashes
+      await saveLocalHashes(consoleId, pcecdHashes);
+      return pcecdHashes;
+    }
+
 
     // Special case for PlayStation
     if (hashMethod == HashMethod.psx) {

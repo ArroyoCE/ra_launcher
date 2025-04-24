@@ -67,6 +67,8 @@ class PCECDHashIntegration {
     return hashes;
   }
 
+
+
   Future<Map<String, dynamic>?> parseCueFile(String cuePath) async {
     final cueFile = File(cuePath);
     if (!await cueFile.exists()) return null;
@@ -188,136 +190,161 @@ class PCECDHashIntegration {
     await _chdHandler.debugChdFile(chdPath);
   }
   
-  Future<String?> hashPCECDFromBin(String binPath, int sectorSize, int dataOffset, int indexOffset, String trackType) async {
-    final binFile = File(binPath);
-    if (!await binFile.exists()) {
+  // Inside pce_cd_hash_integration.dart
+
+Future<String?> hashPCECDFromBin(String binPath, int sectorSize, int dataOffset, int indexOffset, String trackType) async {
+  final binFile = File(binPath);
+  if (!await binFile.exists()) {
+    // Added log
+    return null;
+  }
+
+  // Added log
+  // Added log
+
+  final file = await binFile.open(mode: FileMode.read);
+  try {
+    // Calculate first track sector
+    final firstTrackSector = indexOffset;
+
+    // In PC Engine CD, we need to check sector 1 (relative to first track sector)
+    final sectorToCheck = firstTrackSector + 1;
+    final sectorPosition = sectorToCheck * sectorSize;
+    // Added log
+
+    // Seek to the sector position
+    await file.setPosition(sectorPosition);
+
+    // Read the whole sector for inspection
+    final sectorBuffer = Uint8List(sectorSize);
+    final bytesRead = await file.readInto(sectorBuffer);
+
+    if (bytesRead < sectorSize) {
+      // Added log
       return null;
     }
-    
-    final file = await binFile.open(mode: FileMode.read);
-    try {
-      // Calculate first track sector
-      final firstTrackSector = indexOffset;
-      
-      // In PC Engine CD, we need to check sector 1 (relative to first track sector)
-      final sectorToCheck = firstTrackSector + 1;
-      final sectorPosition = sectorToCheck * sectorSize;
-      
-      // Seek to the sector position
-      await file.setPosition(sectorPosition);
-      
-      // Read the whole sector for inspection
-      final sectorBuffer = Uint8List(sectorSize);
-      final bytesRead = await file.readInto(sectorBuffer);
-      
-      if (bytesRead < sectorSize) {
-        return null;
-      }
-      
-      // Extract the data portion of the sector
-      final dataBuffer = sectorBuffer.sublist(dataOffset);
-      
-      // Debug print a larger portion around where the marker should be
-      dataBuffer.sublist(0, 100);
-      
-      // Check for PC Engine CD marker
-      const marker = "PC Engine CD-ROM SYSTEM";
-      bool isPCECD = false;
-      int markerPos = -1;
-      
-      // More flexible search for the marker
-      for (int offset = 0; offset <= 40; offset++) {
-        if (offset + marker.length <= dataBuffer.length) {
-          bool match = true;
-          for (int i = 0; i < marker.length; i++) {
-            if (dataBuffer[offset + i] != marker.codeUnitAt(i)) {
-              match = false;
-              break;
-            }
-          }
-          
-          if (match) {
-            isPCECD = true;
-            markerPos = offset;
+
+    // Extract the data portion of the sector
+    final dataBuffer = sectorBuffer.sublist(dataOffset);
+
+    // Check for PC Engine CD marker
+    const marker = "PC Engine CD-ROM SYSTEM";
+    bool isPCECD = false;
+    int markerPos = -1;
+
+    // More flexible search for the marker
+    for (int offset = 0; offset <= 40; offset++) {
+      if (offset + marker.length <= dataBuffer.length) {
+        bool match = true;
+        for (int i = 0; i < marker.length; i++) {
+          if (dataBuffer[offset + i] != marker.codeUnitAt(i)) {
+            match = false;
             break;
           }
         }
+
+        if (match) {
+          isPCECD = true;
+          markerPos = offset;
+          // Added log
+          break;
+        }
       }
-      
-      if (isPCECD) {
-        
-        // Extract title (22 bytes) at offset 106 from the beginning of the data
-        int titleOffset = 106;
-        
-        // If marker position is not at standard position (32), adjust title offset
-        if (markerPos != 32 && markerPos > 0) {
-          titleOffset = markerPos + marker.length + (106 - (32 + marker.length));
-        }
-        
-        // Ensure titleOffset is within bounds
-        if (titleOffset + 22 > dataBuffer.length) {
-          titleOffset = dataBuffer.length - 22;
-        }
-        
-        final titleBytes = dataBuffer.sublist(titleOffset, titleOffset + 22);
-        
-        // Title in ASCII
-        String.fromCharCodes(titleBytes.where((b) => b >= 32 && b <= 126)).trim();
-        
-        // Determine program sector and size (always at beginning of data)
-        final programSector = (dataBuffer[0] << 16) + 
-                            (dataBuffer[1] << 8) + 
-                            dataBuffer[2];
-                            
-        final numSectors = dataBuffer[3];
-        
-        
-        // Calculate absolute sector position
-        final absoluteProgramSector = firstTrackSector + programSector;
-        
-        // Create MD5 context for hashing
-        final dataToHash = <int>[];
-        
-        // First add title bytes exactly as in C implementation
-        dataToHash.addAll(titleBytes);
-        
-        // Now read and hash the program sectors
-        for (int i = 0; i < numSectors; i++) {
-          // Calculate the sector position
-          final sectorPosition = (absoluteProgramSector + i) * sectorSize;
-          
-          // Seek to that position
-          await file.setPosition(sectorPosition);
-          
-          // Read the whole sector
-          final programSectorBuffer = Uint8List(sectorSize);
-          final bytesRead = await file.readInto(programSectorBuffer);
-          if (bytesRead < sectorSize) {
-            break;
-          }
-          
-          // Extract the data portion (always 2048 bytes)
-          final programData = programSectorBuffer.sublist(dataOffset, dataOffset + 2048);
-          
-          // Add to hash data
-          dataToHash.addAll(programData);
-        }
-        
-        // Compute final MD5 hash - use Dart's native implementation
-        final digest = md5.convert(dataToHash);
-        final hash = digest.toString();
-        
-        return hash;
-      } 
-      else {
-        // TO DO:
-        // Similar code for GameExpress CDs would go here
-        // This would involve parsing ISO9660 to find BOOT.BIN
-        
-        return null;
-      }
-    } finally {
-      await file.close();
     }
+
+    if (isPCECD) {
+      // Extract title (22 bytes) at offset 106 from the beginning of the data
+      int titleOffset = 106;
+
+      // If marker position is not at standard position (32), adjust title offset
+      if (markerPos != 32 && markerPos > 0) {
+        titleOffset = markerPos + marker.length + (106 - (32 + marker.length));
+      }
+
+      // Ensure titleOffset is within bounds
+      if (titleOffset + 22 > dataBuffer.length) {
+        titleOffset = dataBuffer.length - 22;
+      }
+
+      final titleBytes = dataBuffer.sublist(titleOffset, titleOffset + 22);
+      titleBytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join(' '); // For logging
+      String.fromCharCodes(titleBytes.where((b) => b >= 32 && b <= 126)).trim(); // For logging
+      // Added log
+
+      // Determine program sector and size (always at beginning of data)
+      final programSector = (dataBuffer[0] << 16) +
+                          (dataBuffer[1] << 8) +
+                          dataBuffer[2];
+
+      final numSectors = dataBuffer[3];
+      // Added log
+
+      // Calculate absolute sector position
+      final absoluteProgramSector = firstTrackSector + programSector;
+      // Added log
+
+      // Create MD5 context for hashing
+      final dataToHash = <int>[];
+
+      // First add title bytes exactly as in C implementation
+      dataToHash.addAll(titleBytes);
+
+      // Now read and hash the program sectors
+      // Added log
+      for (int i = 0; i < numSectors; i++) {
+        final currentAbsoluteSector = absoluteProgramSector + i;
+        // Calculate the sector position
+        final programSectorPosition = currentAbsoluteSector * sectorSize;
+
+        // Optional: Log only first/last few sectors to avoid excessive output
+        // if (i < 3 || i >= numSectors - 3) {
+        //   print('[BIN]     Reading sector $currentAbsoluteSector at byte offset $programSectorPosition');
+        // }
+
+        // Seek to that position
+        await file.setPosition(programSectorPosition);
+
+        // Read the whole sector
+        final programSectorBuffer = Uint8List(sectorSize);
+        final bytesRead = await file.readInto(programSectorBuffer);
+        if (bytesRead < sectorSize) {
+           // Added log
+           break; // Or handle error appropriately
+        }
+
+        // Extract the data portion (always 2048 bytes)
+        if (dataOffset + 2048 > programSectorBuffer.length) {
+             // Added log
+             break; // Or handle error
+        }
+        final programData = programSectorBuffer.sublist(dataOffset, dataOffset + 2048);
+
+        // Add to hash data
+        dataToHash.addAll(programData);
+      }
+
+      // Compute final MD5 hash - use Dart's native implementation
+      final digest = md5.convert(dataToHash);
+      final hash = digest.toString();
+      // Added log
+
+      return hash;
+    }
+    else {
+      // Added log
+      // TO DO:
+      // Similar code for GameExpress CDs would go here
+      // This would involve parsing ISO9660 to find BOOT.BIN
+
+      return null;
+    }
+  } catch (e) { // Added catch block for more info
+      return null;
   }
+  finally {
+    await file.close();
+  }
+}
+
+
 }

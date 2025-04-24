@@ -1,63 +1,43 @@
 // lib/services/hashing/unified_hash_service.dart
+import 'dart:async'; // Import dart:async for FutureOr (though not directly used in the final fix)
 import 'dart:io';
-import 'dart:collection';
-import 'dart:isolate';
+import 'dart:math'; // Import dart:math for max function
 
 import 'package:flutter/foundation.dart';
 import 'package:path/path.dart' as path;
+// Adjust the import path if necessary based on your project structure
 import 'package:retroachievements_organizer/services/hashing/native/rc_hash_dll.dart';
 
 class UnifiedHashService {
-  final RCHashDLL _rcHashDll = RCHashDLL();
-  final Map<int, HashInstancePool> _hashPools = {};
-  
-  // Get or create a hash pool for a specific console ID
-  HashInstancePool _getHashPool(int consoleId) {
-    if (!_hashPools.containsKey(consoleId)) {
-      _hashPools[consoleId] = HashInstancePool(poolSize: 8); // Adjust pool size as needed
-    }
-    return _hashPools[consoleId]!;
-  }
-  
-  // Hash a single file with better error handling
+  // Hash a single file using an isolate
   Future<String> hashFile(String filePath, int consoleId) async {
+    if (path.extension(filePath).toLowerCase() == '.chd') {
+      return '';
+    }
     try {
-      // Quick check for CHD
-      if (path.extension(filePath).toLowerCase() == '.chd') {
-        debugPrint('CHD files are no longer supported for hashing: $filePath');
-        return '';
-      }
-      
-      // Use isolate for computation
-      return await compute(_hashRegularFile, {
+      return await compute(_hashRegularFileIsolate, {
         'filePath': filePath,
         'consoleId': consoleId,
       });
     } catch (e) {
-      debugPrint('Error hashing file $filePath: $e');
-      return ''; // Return empty instead of rethrowing to avoid stopping batch processing
+      debugPrint('Error hashing file $filePath in compute: $e');
+      return '';
     }
   }
-  
-  // Optimized method to gather files to hash
-  Future<List<String>> _gatherFilesToHash(List<String> folders, Set<String> validExtensions) async {
-    final List<String> allFiles = [];
-    final List<Future<List<String>>> folderScans = [];
-    
-    // Start all folder scans in parallel
-    for (final folder in folders) {
-      folderScans.add(_scanSingleFolder(folder, validExtensions));
+
+  // Static method designed to be run in an isolate via compute
+  static String _hashRegularFileIsolate(Map<String, dynamic> params) {
+    final filePath = params['filePath'] as String;
+    final consoleId = params['consoleId'] as int;
+    try {
+      final rcHashDll = RCHashDLL();
+      return rcHashDll.hashFile(filePath, consoleId);
+    } catch (e) {
+      // debugPrint('Error in isolate hashing $filePath: $e'); // Can be noisy
+      return '';
     }
-    
-    // Wait for all scans to complete and combine results
-    final results = await Future.wait(folderScans);
-    for (final files in results) {
-      allFiles.addAll(files);
-    }
-    
-    return allFiles;
   }
-  
+
   // Scan a single folder for files matching extensions
   Future<List<String>> _scanSingleFolder(String folder, Set<String> validExtensions) async {
     final List<String> foundFiles = [];
@@ -67,158 +47,114 @@ class UnifiedHashService {
         debugPrint('Directory does not exist: $folder');
         return foundFiles;
       }
-      
-      await for (final entity in dir.list(recursive: true)) {
+      final Stream<FileSystemEntity> entityStream = dir.list(recursive: true, followLinks: false);
+      await for (final entity in entityStream) {
         if (entity is File) {
-          final extension = path.extension(entity.path).toLowerCase();
+          final String filePath = entity.path;
+          final String extension = path.extension(filePath).toLowerCase();
           if (validExtensions.contains(extension)) {
-            foundFiles.add(entity.path);
+            foundFiles.add(filePath);
           }
         }
       }
     } catch (e) {
       debugPrint('Error scanning folder $folder: $e');
     }
-    
     return foundFiles;
   }
-  
-  // Calculate optimal batch size based on file count and system resources
-  int _calculateOptimalBatchSize(int fileCount) {
-    // Use isolate count to optimize batch size for parallelism
-    final int isolateCount = Platform.numberOfProcessors;
-    
-    // Adjust batch size based on file count and available processors
-    if (fileCount < 100) return isolateCount * 4;
-    if (fileCount < 500) return isolateCount * 3;
-    return isolateCount * 2; // Default for large collections
+
+  // Optimized method to gather files to hash by scanning folders in parallel
+  Future<List<String>> _gatherFilesToHash(List<String> folders, Set<String> validExtensions) async {
+    final List<Future<List<String>>> folderScans = folders
+        .map((folder) => _scanSingleFolder(folder, validExtensions))
+        .toList();
+    final List<List<String>> results = await Future.wait(folderScans);
+    return results.expand((files) => files).toList();
   }
-  
-  // Optimized hash files in folders method
+
+  // Calculate a reasonable number of concurrent hashing operations
+  int _calculateConcurrencyLevel() {
+    final int cores = Platform.numberOfProcessors;
+    return max(2, min(cores * 2, 16)); // Example: Min 2, Max 16, typically 2x cores
+  }
+
+  // Hash files found in specified folders, processing with limited concurrency
   Future<Map<String, String>> hashFilesInFolders(
-    int consoleId, 
-    List<String> folders, 
-    List<String> validExtensions,
-    {Function(int current, int total)? progressCallback}
-  ) async {
+    int consoleId,
+    List<String> folders,
+    List<String> validExtensions, {
+    Function(int current, int total)? progressCallback,
+  }) async {
     final Map<String, String> hashes = {};
-    
-    // Filter out .chd extension and use Set for O(1) lookups
     final validExtensionsSet = validExtensions
         .where((ext) => ext.toLowerCase() != '.chd')
         .map((e) => e.toLowerCase())
         .toSet();
-    
+
+    if (validExtensionsSet.isEmpty && !validExtensions.contains('.chd')) {
+         debugPrint('No valid extensions provided (excluding .chd).');
+         return hashes;
+    }
+    if (folders.isEmpty) {
+        debugPrint('No folders provided to scan.');
+        return hashes;
+    }
+
     debugPrint('Starting hash process for console ID: $consoleId');
     debugPrint('Folders to scan: ${folders.join(", ")}');
-    
-    // Start file gathering
-    final allFiles = await _gatherFilesToHash(folders, validExtensionsSet);
-    debugPrint('Found ${allFiles.length} files to hash');
-    
+    debugPrint('Valid extensions: ${validExtensionsSet.join(", ")}');
+
+    final List<String> allFiles = await _gatherFilesToHash(folders, validExtensionsSet);
+    final int totalFiles = allFiles.length;
+    debugPrint('Found $totalFiles files to hash.');
+
     if (allFiles.isEmpty) {
       return hashes;
     }
-    
-    // Adapt batch size based on file count and system
-    final batchSize = _calculateOptimalBatchSize(allFiles.length);
-    debugPrint('Using batch size: $batchSize');
-    
-    // Sort files by size to distribute work more evenly
-    await _sortFilesBySize(allFiles);
-    
-    // Process files in batches
-    for (int i = 0; i < allFiles.length; i += batchSize) {
-      final int end = (i + batchSize < allFiles.length) ? i + batchSize : allFiles.length;
-      final batch = allFiles.sublist(i, end);
-      
-      // Process batch in parallel
-      final results = await Future.wait(
-        batch.map((file) => hashFile(file, consoleId).catchError((e) {
-          debugPrint('Failed to hash $file: $e');
-          return '';
-        }))
-      );
-      
-      // Add successful hashes to the map
-      for (int j = 0; j < batch.length; j++) {
-        final hash = results[j];
-        if (hash.isNotEmpty) {
-          hashes[batch[j]] = hash;
-        }
-      }
-      
-      // Update progress
-      if (progressCallback != null) {
-        progressCallback(end, allFiles.length);
-      }
-    }
-    
-    return hashes;
-  }
-  
-  // Sort files by size to better distribute workload
-  Future<void> _sortFilesBySize(List<String> files) async {
-    // Get file sizes
-    final fileSizes = <String, int>{};
-    for (final file in files) {
-      try {
-        final fileInfo = await File(file).stat();
-        fileSizes[file] = fileInfo.size;
-      } catch (e) {
-        fileSizes[file] = 0;
-      }
-    }
-    
-    // Sort files with largest files first to ensure they start processing earlier
-    files.sort((a, b) => fileSizes[b]!.compareTo(fileSizes[a]!));
-  }
-  
-  // Static method for isolate computation
-  static String _hashRegularFile(Map<String, dynamic> params) {
-    final filePath = params['filePath'] as String;
-    final consoleId = params['consoleId'] as int;
-    
-    try {
-      final rcHashDll = RCHashDLL();
-      return rcHashDll.hashFile(filePath, consoleId);
-    } catch (e) {
-      debugPrint('Error in isolate hashing $filePath: $e');
-      return '';
-    }
-  }
-}
 
-// Hash instance pool for better performance
-class HashInstancePool {
-  final int _poolSize;
-  final List<RCHashDLL> _instances = [];
-  final List<bool> _inUse = [];
-  
-  HashInstancePool({int poolSize = 8}) : _poolSize = poolSize {
-    // Initialize the pool
-    for (int i = 0; i < _poolSize; i++) {
-      _instances.add(RCHashDLL());
-      _inUse.add(false);
+    final int concurrencyLevel = _calculateConcurrencyLevel();
+    debugPrint('Using concurrency level: $concurrencyLevel');
+
+    // --- Corrected Concurrency Logic ---
+    final List<Future<void>> activeTasks = []; // List to track active hashing futures
+    int processedCount = 0;
+    final Stream<String> fileStream = Stream.fromIterable(allFiles);
+
+    await for (final filePath in fileStream) {
+        // Wait if the number of active tasks reaches the concurrency limit
+        while (activeTasks.length >= concurrencyLevel) {
+            // Wait for *any* of the active tasks to complete
+            await Future.any(activeTasks);
+            // Note: We rely on the task's own `whenComplete` to remove itself,
+            // so no explicit removal is needed here after Future.any.
+            // The list size check in the while loop condition handles throttling.
+        }
+
+        // Launch the next hashing task
+        late final Future<void> task; // Declare task as late
+        task = hashFile(filePath, consoleId).then((hash) {
+            if (hash.isNotEmpty) {
+                hashes[filePath] = hash; // Store successful hash
+            }
+        }).catchError((e) {
+            // Log error but continue processing other files
+            debugPrint('Error processing hash future for $filePath: $e');
+        }).whenComplete(() {
+            // This block executes after the future completes (success or error)
+            processedCount++;
+            progressCallback?.call(processedCount, totalFiles); // Update progress
+            // **Crucially, remove this task from the active list *after* it completes**
+            activeTasks.remove(task);
+        });
+
+        // Add the newly created task future to the list of active tasks
+        activeTasks.add(task);
     }
-  }
-  
-  // Get an available instance
-  RCHashDLL? getAvailableInstance() {
-    for (int i = 0; i < _poolSize; i++) {
-      if (!_inUse[i]) {
-        _inUse[i] = true;
-        return _instances[i];
-      }
-    }
-    return null; // No available instances
-  }
-  
-  // Release an instance
-  void releaseInstance(RCHashDLL instance) {
-    final index = _instances.indexOf(instance);
-    if (index != -1) {
-      _inUse[index] = false;
-    }
+
+    // After the loop finishes, wait for any remaining tasks that might still be running
+    await Future.wait(activeTasks);
+
+    debugPrint('Hashing process completed. Generated ${hashes.length} valid hashes for $processedCount processed files.');
+    return hashes;
   }
 }

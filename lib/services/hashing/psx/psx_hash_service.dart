@@ -6,7 +6,7 @@ import 'package:flutter/foundation.dart';
 import 'package:path/path.dart' as path;
 import 'package:retroachievements_organizer/services/hashing/CHD/chd_read_common.dart';
 
-import 'package:retroachievements_organizer/services/hashing/CHD/isolate_chd_processor.dart';
+import 'package:retroachievements_organizer/services/hashing/psx/isolate_chd_processor.dart';
 
 class PsxHashService {
   static final PsxHashService _instance = PsxHashService._internal();

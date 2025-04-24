@@ -1,87 +1,84 @@
 import 'dart:io';
 import 'dart:isolate';
 import 'dart:math';
+import 'dart:typed_data';
 
 import 'package:crypto/crypto.dart';
-import 'package:flutter/foundation.dart';
+import 'package:flutter/foundation.dart'; // Only needed if using compute outside the pool
 import 'package:path/path.dart' as path;
 
-/// Class that implements hashing for SNES ROMs
+/// Optimized class for hashing SNES ROMs using isolates.
 class SnesHashIntegration {
-  // Constants
   static const int maxBufferSize = 64 * 1024 * 1024; // 64MB
-  static const int batchSize = 16;
+  static const int defaultBatchSize = 16;
 
-  // Compute pool for reusing isolates
   late ComputePool _computePool;
   bool _poolInitialized = false;
 
-  /// Initialize the compute pool
-Future<void> _ensurePoolInitialized() async {
-  if (!_poolInitialized) {
-    // More adaptive worker count based on file count and system capabilities
-    final int isolateCount = max(2, min(Platform.numberOfProcessors - 1, 8));
-    _computePool = ComputePool(isolateCount);
-    await _computePool.initialize();
-    _poolInitialized = true;
+  Future<void> _ensurePoolInitialized() async {
+    if (!_poolInitialized) {
+      final int isolateCount = max(2, min(Platform.numberOfProcessors - 1, 8));
+      _computePool = ComputePool(isolateCount);
+      await _computePool.initialize();
+      _poolInitialized = true;
+    }
   }
-}
 
-  /// Process SNES files in parallel using compute pool
-  Future<Map<String, String>> hashSnesFilesInFolders(List<String> folders) async {
+  /// Processes SNES files in parallel using the compute pool.
+  Future<Map<String, String>> hashSnesFilesInFolders(List<String> folders, {int batchSize = defaultBatchSize}) async {
     final Map<String, String> hashes = {};
     List<String> validExtensions = ['.sfc', '.smc', '.swc', '.fig'];
 
     if (validExtensions.isEmpty) return hashes;
 
-    // Find files to process in parallel
-    final List<File> filesToProcess = await _findFilesToProcess(folders, validExtensions);
-    
-    if (filesToProcess.isEmpty) return hashes;
+    final List<String> filePathsToProcess = await _findFilesToProcess(folders, validExtensions);
 
-    // Initialize compute pool if needed
+    if (filePathsToProcess.isEmpty) return hashes;
+
     await _ensurePoolInitialized();
-    
-    // For SNES ROMs, use a special approach with larger batches
-    final result = await _computePool.processFiles(filesToProcess, batchSizeFactor: 2);
+
+    // Pass file paths instead of File objects
+    final result = await _computePool.processFilePaths(filePathsToProcess, batchSize);
     hashes.addAll(result);
 
     return hashes;
   }
 
-  /// Find files to process in parallel
-  Future<List<File>> _findFilesToProcess(List<String> folders, List<String> validExtensions) async {
-    final List<File> filesToProcess = [];
-    final List<Future<List<File>>> scanFutures = [];
-    
+  /// Finds file paths to process in parallel.
+  Future<List<String>> _findFilesToProcess(List<String> folders, List<String> validExtensions) async {
+    final List<String> filePathsToProcess = [];
+    final List<Future<List<String>>> scanFutures = [];
+
     for (final folderPath in folders) {
       final directory = Directory(folderPath);
       if (await directory.exists()) {
         scanFutures.add(_scanFolder(directory, validExtensions));
       }
     }
-    
-    // Wait for all folder scans to complete in parallel
+
     final results = await Future.wait(scanFutures);
     for (final files in results) {
-      filesToProcess.addAll(files);
+      filePathsToProcess.addAll(files);
     }
-    
-    return filesToProcess;
+
+    return filePathsToProcess;
   }
 
-  /// Scan a folder for files with valid extensions
-  Future<List<File>> _scanFolder(Directory directory, List<String> validExtensions) async {
-    final List<File> result = [];
-    await for (final entity in directory.list(recursive: true)) {
-      if (entity is File && validExtensions.contains(path.extension(entity.path).toLowerCase())) {
-        result.add(entity);
+  /// Scans a folder for file paths with valid extensions.
+  Future<List<String>> _scanFolder(Directory directory, List<String> validExtensions) async {
+    final List<String> result = [];
+    try {
+      await for (final entity in directory.list(recursive: true, followLinks: false)) {
+        if (entity is File && validExtensions.contains(path.extension(entity.path).toLowerCase())) {
+          result.add(entity.path);
+        }
       }
+    } catch (e) {
+       // Handle potential errors listing directories (e.g., permissions)
     }
     return result;
   }
 
-  /// Disposes resources
   void dispose() {
     if (_poolInitialized) {
       _computePool.dispose();
@@ -89,169 +86,118 @@ Future<void> _ensurePoolInitialized() async {
     }
   }
 
-  /// Hashes a SNES ROM - Optimized implementation
-  Future<String?> hashSNES(Uint8List bytes) async {
-    // Limit buffer size
+  /// Hashes a SNES ROM directly (for use within isolates).
+  String? hashSNESDirect(Uint8List bytes) {
     final bufferSize = bytes.length > maxBufferSize ? maxBufferSize : bytes.length;
+    final view = Uint8List.sublistView(bytes, 0, bufferSize); // Use view to avoid copying
 
-    // SNES ROMs can have headers and be in different formats
-    // Need to check for different ROM layouts
     if (bufferSize < 0x8000) {
-      // Too small to be a valid SNES ROM - use direct computation for small files
-      return md5.convert(bytes.sublist(0, bufferSize)).toString();
+      return md5.convert(view).toString();
     }
 
-    // Fast path: Check for 512-byte header (typically .smc files)
     bool hasHeader = bufferSize % 1024 == 512;
     int offset = hasHeader ? 512 : 0;
-    
-    // Most common case: just removing header is sufficient
-    // Skip the complex header detection for most ROMs to improve performance
-    if (hasHeader && bufferSize >= 512 + 0x8000) {
-      // Skip header and hash the ROM directly
-      return await computeRawMD5(bytes.sublist(offset, bufferSize));
-    }
-    
-    // For other cases, fallback to the full detection logic
-    // but only if file size indicates a potential complex format
-    if (bufferSize >= 0x8000 + offset) {
-      bool needsFullChecks = false;
-      
-      // Quick check for HiROM marker - only do full checks if this looks suspicious
-      if (offset + 0xFFD5 < bufferSize) {
-        final romMode = bytes[offset + 0xFFD5] & 0x01;
-        bool isHiROM = romMode == 1;
-        
-        // Only do full checksum verification for ROMs that don't match expectations
-        if ((isHiROM && bufferSize < 1 * 1024 * 1024) || (!isHiROM && bufferSize > 4 * 1024 * 1024)) {
-          needsFullChecks = true;
-        }
+
+    // Basic header skip - complex logic removed for brevity/performance focus
+    // If detailed format checking is crucial, re-add necessary logic here.
+
+    Uint8List dataToHash;
+    if (hasHeader) {
+      if (bufferSize > offset) {
+         dataToHash = Uint8List.sublistView(bytes, offset, bufferSize);
+      } else {
+         return null; // Invalid state
       }
-      
-      // Only run full format detection if needed
-      if (needsFullChecks) {
-        bool isHiROM = false;
-        
-        // Check HiROM marker at 0xFFD5
-        if (offset + 0xFFD5 < bufferSize) {
-          final romMode = bytes[offset + 0xFFD5] & 0x01;
-          if (romMode == 1) {
-            isHiROM = true;
-          }
-        }
-
-        // Verify with checksum check
-        if (offset + 0xFFDC + 4 < bufferSize) {
-          int checksum = bytes[offset + 0xFFDC] | (bytes[offset + 0xFFDD] << 8);
-          int checksumComplement = bytes[offset + 0xFFDE] | (bytes[offset + 0xFFDF] << 8);
-
-          if ((checksum ^ checksumComplement) != 0xFFFF) {
-            // Try alternate location for LoROM
-            if (!isHiROM && offset + 0x7FDC + 4 < bufferSize) {
-              checksum = bytes[offset + 0x7FDC] | (bytes[offset + 0x7FDD] << 8);
-              checksumComplement = bytes[offset + 0x7FDE] | (bytes[offset + 0x7FDF] << 8);
-
-              if ((checksum ^ checksumComplement) == 0xFFFF) {
-                isHiROM = false;
-              }
-            }
-          }
-        }
-      }
+    } else {
+       dataToHash = view;
     }
 
-    // Get the file data for hashing - at this point we just use the detected header offset
-    final dataBytes = hasHeader
-        ? bytes.sublist(offset, bufferSize)
-        : bytes.sublist(0, bufferSize);
+    if (dataToHash.isEmpty) return null; // Avoid hashing empty data
 
-    return await computeRawMD5(dataBytes);
+    return md5.convert(dataToHash).toString();
   }
 
-  /// Computes an MD5 hash of raw bytes
-  Future<String> computeRawMD5(Uint8List bytes) async {
-    // Direct computation for small files to avoid compute overhead
-    if (bytes.length < 2 * 1024 * 1024) { // 2MB threshold - increased for SNES ROMs
-      final digest = md5.convert(bytes);
-      return digest.toString();
-    }
-    
-    // Use compute for better performance on larger files
-    return await compute(_md5Hash, bytes);
-  }
-
-  // Static method for compute isolation
-  static String _md5Hash(Uint8List bytes) {
-    final digest = md5.convert(bytes);
-    return digest.toString();
-  }
+  // Optional: Keep a version that uses compute for external calls if needed
+  // Future<String?> hashSNESWithCompute(Uint8List bytes) async {
+  //   return await compute(_computeMd5ForSNES, bytes);
+  // }
+  // static String? _computeMd5ForSNES(Uint8List bytes) {
+  //    // Create a temporary hasher instance to call the direct method
+  //    final hasher = SnesHashIntegration();
+  //    return hasher.hashSNESDirect(bytes);
+  // }
 }
 
-/// Worker for handling file processing in isolates
+/// Manages a pool of isolates for parallel file processing.
 class ComputePool {
   final List<Isolate> _isolates = [];
   final List<SendPort> _sendPorts = [];
   final int size;
-  
+
   ComputePool(this.size);
-  
+
   Future<void> initialize() async {
     for (int i = 0; i < size; i++) {
       final receivePort = ReceivePort();
       final isolate = await Isolate.spawn(_isolateEntryPoint, receivePort.sendPort);
       final sendPort = await receivePort.first as SendPort;
-      
       _isolates.add(isolate);
       _sendPorts.add(sendPort);
     }
   }
-  
-  Future<Map<String, String>> processFiles(List<File> files, {int batchSizeFactor = 1}) async {
-    // Use larger batches for SNES
-    final int actualBatchSize = SnesHashIntegration.batchSize * batchSizeFactor;
-    
-    // Distribute files evenly across workers
-    final int filesPerWorker = (files.length / size).ceil();
-    final List<List<File>> chunks = [];
-    
-    for (int i = 0; i < files.length; i += filesPerWorker) {
-      final end = i + filesPerWorker > files.length ? files.length : i + filesPerWorker;
-      chunks.add(files.sublist(i, end));
+
+  Future<Map<String, String>> processFilePaths(List<String> filePaths, int batchSize) async {
+    if (filePaths.isEmpty || _sendPorts.isEmpty) return {};
+
+    // Distribute file paths somewhat evenly, simple division
+    final int pathsPerWorker = (filePaths.length / _sendPorts.length).ceil();
+    final List<List<String>> chunks = [];
+
+    for (int i = 0; i < filePaths.length; i += pathsPerWorker) {
+      final end = (i + pathsPerWorker > filePaths.length) ? filePaths.length : i + pathsPerWorker;
+      chunks.add(filePaths.sublist(i, end));
     }
-    
-    // Make sure we don't have more chunks than workers
-    while (chunks.length > _sendPorts.length) {
-      final lastChunk = chunks.removeLast();
-      chunks.last.addAll(lastChunk);
-    }
-    
-    // Process all chunks in parallel
+
+    // Process chunks in parallel
     final List<Future<Map<String, String>>> futures = [];
     for (int i = 0; i < chunks.length; i++) {
-      if (chunks[i].isNotEmpty) {
-        futures.add(_processChunk(_sendPorts[i], chunks[i], actualBatchSize));
-      }
+       if (i < _sendPorts.length && chunks[i].isNotEmpty) {
+          futures.add(_processChunk(_sendPorts[i], chunks[i], batchSize));
+       } else if (chunks[i].isNotEmpty) {
+          // Handle case where there are more chunks than isolates (shouldn't happen with ceil)
+          // Or append to the last worker
+          if(futures.isNotEmpty) {
+             // This logic might need refinement depending on desired load balancing
+             // futures.last = futures.last.then((map) async {
+             //    final extraMap = await _processChunk(_sendPorts.last, chunks[i], batchSize);
+             //    map.addAll(extraMap);
+             //    return map;
+             // });
+          }
+       }
     }
-    
-    // Combine results
+
     final results = await Future.wait(futures);
     final Map<String, String> combinedHashes = {};
     for (final result in results) {
       combinedHashes.addAll(result);
     }
-    
+
     return combinedHashes;
   }
-  
-Future<Map<String, String>> _processChunk(SendPort port, List<File> files, int batchSize) async {
-  // Pre-sort files by size before sending to isolate
-  files.sort((a, b) => a.lengthSync().compareTo(b.lengthSync()));
-  
-  final ReceivePort responsePort = ReceivePort();
-  port.send([files, responsePort.sendPort, batchSize]);
-  return await responsePort.first as Map<String, String>;
-}
-  
+
+  Future<Map<String, String>> _processChunk(SendPort port, List<String> filePaths, int batchSize) async {
+    final ReceivePort responsePort = ReceivePort();
+    port.send([filePaths, responsePort.sendPort, batchSize]);
+    final result = await responsePort.first;
+    if (result is Map<String, String>) {
+       return result;
+    } else {
+       // Handle potential errors sent back from isolate
+       return {};
+    }
+  }
+
   void dispose() {
     for (final isolate in _isolates) {
       isolate.kill(priority: Isolate.immediate);
@@ -259,72 +205,130 @@ Future<Map<String, String>> _processChunk(SendPort port, List<File> files, int b
     _isolates.clear();
     _sendPorts.clear();
   }
-  
- static void _isolateEntryPoint(SendPort mainSendPort) {
-  final ReceivePort receivePort = ReceivePort();
-  mainSendPort.send(receivePort.sendPort);
-  
-  // Preallocate a buffer for file reading
-  Uint8List? reuseBuffer;
-  
-  receivePort.listen((message) async {
-    final List<File> files = message[0] as List<File>;
-    final SendPort sendPort = message[1] as SendPort;
-    final int batchSize = message.length > 2 ? message[2] as int : SnesHashIntegration.batchSize;
-    
-    final Map<String, String> batchHashes = {};
-    final hasher = SnesHashIntegration();
-    
-    // Process files in batches for better memory management
-    for (int i = 0; i < files.length; i += batchSize) {
-      final end = i + batchSize > files.length 
-          ? files.length 
-          : i + batchSize;
-      
-      final batch = files.sublist(i, end);
-      
-      // Sort by file size to process similar-sized files together
-      batch.sort((a, b) => a.lengthSync().compareTo(b.lengthSync()));
-      
-      // Process batch - REPLACE THIS ENTIRE LOOP
-      for (final file in batch) {
-        try {
-          // Allocate or resize buffer if needed
-          final fileSize = file.lengthSync();
-          if (reuseBuffer == null || reuseBuffer!.length < fileSize) {
-            reuseBuffer = Uint8List(fileSize);
+
+  /// Entry point for isolate workers.
+  static void _isolateEntryPoint(SendPort mainSendPort) {
+    final ReceivePort receivePort = ReceivePort();
+    mainSendPort.send(receivePort.sendPort);
+
+    Uint8List? reuseBuffer;
+    final hasher = SnesHashIntegration(); // Create instance once per isolate
+
+    receivePort.listen((message) async {
+      if (message is! List || message.length < 3) {
+         // Optionally send back an error indicator
+         // (message[1] as SendPort).send(<error_object>);
+         return;
+      }
+
+      final List<String> filePaths = message[0] as List<String>;
+      final SendPort replyPort = message[1] as SendPort;
+      final int batchSize = message[2] as int;
+
+      final Map<String, String> batchHashes = {};
+
+      // Process files in batches
+      for (int i = 0; i < filePaths.length; i += batchSize) {
+        final end = (i + batchSize > filePaths.length) ? filePaths.length : i + batchSize;
+        final batch = filePaths.sublist(i, end);
+
+        if (batch.isEmpty) continue;
+
+        // --- File Size Handling & Buffer Allocation ---
+        int maxBatchFileSize = 0;
+        final List<MapEntry<String, int>> batchFilesWithSize = [];
+        for(final filePath in batch) {
+            final file = File(filePath);
+            try {
+                final size = await file.length(); // Use async length
+                if (size > 0 && size <= SnesHashIntegration.maxBufferSize) {
+                   batchFilesWithSize.add(MapEntry(filePath, size));
+                   if (size > maxBatchFileSize) {
+                      maxBatchFileSize = size;
+                   }
+                } else if (size > SnesHashIntegration.maxBufferSize) {
+                    // File too large based on constant, record size for potential buffer adjustment
+                    batchFilesWithSize.add(MapEntry(filePath, SnesHashIntegration.maxBufferSize));
+                    if(SnesHashIntegration.maxBufferSize > maxBatchFileSize) {
+                       maxBatchFileSize = SnesHashIntegration.maxBufferSize;
+                    }
+                }
+                // else: skip 0-byte files
+            } catch (e) {
+                // Handle error getting file size (e.g., file disappears)
+            }
+        }
+
+        if(batchFilesWithSize.isEmpty) continue; // Skip batch if no valid files found
+
+        // Allocate or resize buffer ONCE per batch
+        if (maxBatchFileSize > 0 && (reuseBuffer == null || reuseBuffer!.length < maxBatchFileSize)) {
+          try {
+             reuseBuffer = Uint8List(maxBatchFileSize);
+          } catch (e) {
+              // If buffer allocation fails, we cannot process this batch with the buffer
+              reuseBuffer = null; // Reset buffer state
+              // Potentially skip the rest of this batch or handle error differently
+              continue;
           }
-          
-          // Read file into buffer
-          final bytes = await _readFileIntoBuffer(file, reuseBuffer!, fileSize);
-          final fileHash = await hasher.hashSNES(bytes);
-          
-          if (fileHash != null) {
-            batchHashes[file.path] = fileHash;
+        }
+
+        // --- Process Batch ---
+        for (final entry in batchFilesWithSize) {
+          final filePath = entry.key;
+          final fileSize = entry.value; // Use pre-calculated size (capped at maxBufferSize)
+          final file = File(filePath);
+
+          if (reuseBuffer == null) {
+             continue; // Cannot process without buffer
           }
-        } catch (_) {
-          // Ignore hashing errors
+
+          try {
+            // Read file into the buffer
+            final bytesRead = await _readFileIntoBuffer(file, reuseBuffer!, fileSize);
+
+            if (bytesRead != null) {
+                // Use the direct hashing method within the isolate
+                final fileHash = hasher.hashSNESDirect(bytesRead);
+                if (fileHash != null) {
+                  batchHashes[filePath] = fileHash;
+                }
+            }
+          } catch (e) {
+            // Log specific file hashing errors
+          }
         }
       }
-    }
-    
-    sendPort.send(batchHashes);
-  });
-}
+      replyPort.send(batchHashes);
+    });
+  }
 
-// Add this helper method in the same class
-static Future<Uint8List> _readFileIntoBuffer(File file, Uint8List buffer, int fileSize) async {
-  final RandomAccessFile raf = await file.open(mode: FileMode.read);
-  try {
-    await raf.readInto(buffer, 0, fileSize);
-    return buffer.sublist(0, fileSize);
-  } finally {
-    await raf.close();
+  /// Reads file content into a pre-allocated buffer, returning a view of the data read.
+  static Future<Uint8List?> _readFileIntoBuffer(File file, Uint8List buffer, int bytesToRead) async {
+      RandomAccessFile? raf;
+      try {
+          // Ensure we don't try to read more than the buffer allows or file has
+          final readSize = min(bytesToRead, buffer.length);
+          if (readSize <= 0) return null;
+
+          raf = await file.open(mode: FileMode.read);
+          final actualBytesRead = await raf.readInto(buffer, 0, readSize);
+
+          if (actualBytesRead > 0) {
+              // Return a view of the buffer containing the data read
+              return Uint8List.sublistView(buffer, 0, actualBytesRead);
+          } else {
+              return null; // Nothing read
+          }
+      } catch (e) {
+           return null; // Indicate error
+      }
+      finally {
+          try {
+             await raf?.close();
+          } catch (e) {
+              // Ignore close errors
+          }
+      }
   }
 }
-
-
-}
-
-// Add max function if not available
-int max(int a, int b) => a > b ? a : b;

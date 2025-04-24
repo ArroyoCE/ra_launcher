@@ -1,4 +1,4 @@
-// ps2_hash.dart
+// lib/services/hashing/ps2/ps2_hash.dart
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
@@ -7,383 +7,249 @@ import 'package:crypto/crypto.dart' as crypto;
 import 'package:flutter/foundation.dart';
 import 'package:path/path.dart' as path;
 
-import '../CHD/isolate_chd_processor.dart';
+// Consider adding a package for controlling concurrency like 'pool'
+// import 'package:pool/pool.dart';
 
-/// Class to handle hashing PS2 files
+import 'ps2_chd_processor.dart';
+import 'ps2_filesystem.dart';
+
 class Ps2HashCalculator {
-  // Constants for PS2 disc images
   static const String _bootKey = "BOOT2";
-  static const String _cdromPrefix = "cdrom0:";
 
-  /// Hash PS2 files in the provided folders
   Future<Map<String, String>> hashPs2FilesInFolders(List<String> folders) async {
     final Map<String, String> hashes = {};
-    
-    // Valid PS2 file extensions
     final validExtensions = ['.iso', '.bin', '.chd'];
-    
+
+    // --- Start of modifications ---
+
+    final List<File> chdFiles = [];
+    final List<File> isoBinFiles = [];
+
+    // 1. Find and separate files by type first
     for (final folder in folders) {
       try {
         final dir = Directory(folder);
-        if (!await dir.exists()) continue;
-        
-        // Get all files in directory
-        final List<FileSystemEntity> entities = await dir.list(recursive: true).toList();
-        final List<File> files = entities
-            .whereType<File>()
-            .where((file) => validExtensions.contains(path.extension(file.path).toLowerCase()))
-            .toList();
-        
-        debugPrint('Found ${files.length} PS2 files in $folder');
-        
-        // Process each file
-        for (int i = 0; i < files.length; i++) {
-          final file = files[i];
-          final filePath = file.path;
-          
-          try {
-            debugPrint('Processing ${i+1}/${files.length}: $filePath');
-            String? hash;
-            
-            // Process based on file extension
-            if (path.extension(filePath).toLowerCase() == '.chd') {
-              // CHD files use the isolate processor
-              hash = await _hashPs2Chd(filePath);
-            } else {
-              // ISO/BIN files
-              hash = await _hashPs2File(filePath);
-            }
-            
-            if (hash != null && hash.isNotEmpty) {
-              hashes[filePath] = hash;
-              debugPrint('✓ Hashed: $filePath -> $hash');
-            } else {
-              debugPrint('✗ Failed to hash: $filePath');
-            }
-          } catch (e) {
-            debugPrint('Error hashing PS2 file $filePath: $e');
+        if (!await dir.exists()) {
+          debugPrint('Warning: Folder not found: $folder');
+          continue;
+        }
+
+        await for (final entity in dir.list(recursive: true, followLinks: false)) {
+          if (entity is File) {
+             final fileExtension = path.extension(entity.path).toLowerCase();
+             if (validExtensions.contains(fileExtension)) {
+                 if (fileExtension == '.chd') {
+                     chdFiles.add(entity);
+                 } else { // .iso or .bin
+                     isoBinFiles.add(entity);
+                 }
+             }
           }
         }
-      } catch (e) {
-        debugPrint('Error processing folder $folder: $e');
+      } catch (e, stackTrace) {
+        debugPrint('Error listing files in folder $folder: $e');
+        debugPrint('Stack trace: $stackTrace');
       }
     }
-    
+
+    final totalFiles = chdFiles.length + isoBinFiles.length;
+    debugPrint('Found ${chdFiles.length} CHD files and ${isoBinFiles.length} ISO/BIN files.');
+    if (totalFiles == 0) return {};
+
+    // --- Process CHDs Concurrently ---
+    debugPrint('Starting concurrent CHD processing...');
+    final List<Future<MapEntry<String, String?>>> chdFutures = [];
+
+    // Optional: Limit concurrency using a Pool
+    // Adjust the number based on testing (e.g., number of CPU cores)
+    // final pool = Pool(Platform.numberOfProcessors);
+
+    for (int i = 0; i < chdFiles.length; i++) {
+        final file = chdFiles[i];
+        final filePath = file.path;
+
+        // Check existence right before adding future
+        if (!await file.exists()) {
+             debugPrint('Skipping CHD (not found): ${path.basename(filePath)}');
+             continue;
+        }
+
+        debugPrint('Queueing CHD ${i + 1}/${chdFiles.length}: ${path.basename(filePath)}');
+
+        // Create a future for each CHD hash calculation
+        final future = () async {
+            String? hash;
+            try {
+                // Use the isolate processor
+                hash = await Ps2ChdProcessor.processChd(filePath);
+            } catch (e, stackTrace) {
+                debugPrint('Error processing CHD $filePath in future: $e');
+                debugPrint('Stack trace: $stackTrace');
+                hash = null; // Ensure it returns null on error
+            }
+            // Return a MapEntry with the path and the resulting hash (or null)
+            return MapEntry(filePath, hash);
+        }(); // Immediately invoke the async closure to get the Future
+
+        // // To use with Pool:
+        // final future = pool.withResource(() async {
+        //    // ... same async logic as above ...
+        //    return MapEntry(filePath, hash);
+        // });
+
+        chdFutures.add(future);
+    }
+
+    // Wait for all CHD processing futures to complete
+    final List<MapEntry<String, String?>> chdResults = await Future.wait(chdFutures);
+
+    // Add successful CHD hashes to the map
+    int chdSuccessCount = 0;
+    for (final result in chdResults) {
+        if (result.value != null && result.value!.isNotEmpty) {
+            hashes[result.key] = result.value!;
+            chdSuccessCount++;
+            debugPrint('✓ Hashed PS2 (chd): ${path.basename(result.key)} -> ${result.value}');
+        } else {
+            debugPrint('✗ Failed to hash PS2 CHD: ${path.basename(result.key)}');
+        }
+    }
+    debugPrint('Finished concurrent CHD processing. $chdSuccessCount successful hashes.');
+
+
+    // --- Process ISO/BIN Files Sequentially (for now) ---
+    debugPrint('Starting sequential ISO/BIN processing...');
+    int isoBinProcessedCount = 0;
+    for (final file in isoBinFiles) {
+        final filePath = file.path;
+        final fileExtension = path.extension(filePath).toLowerCase();
+        isoBinProcessedCount++;
+
+        try {
+            if (!await file.exists()) {
+               debugPrint('Skipping ISO/BIN (not found): ${path.basename(filePath)}');
+               continue;
+            }
+
+            debugPrint('Processing ISO/BIN $isoBinProcessedCount/${isoBinFiles.length}: ${path.basename(filePath)}');
+            String? hash = await _hashPs2IsoBinFile(filePath); // Still sequential
+
+            if (hash != null && hash.isNotEmpty) {
+              hashes[filePath] = hash;
+              debugPrint('✓ Hashed PS2 (${fileExtension.substring(1)}): ${path.basename(filePath)} -> $hash');
+            } else {
+              debugPrint('✗ Failed to hash PS2 ISO/BIN: ${path.basename(filePath)}');
+            }
+          } catch (e, stackTrace) {
+            debugPrint('Error hashing PS2 ISO/BIN file $filePath: $e');
+            debugPrint('Stack trace: $stackTrace');
+          }
+           // Optional delay to yield UI thread if needed during long sync processing
+           // await Future.delayed(Duration.zero);
+    }
+    debugPrint('Finished sequential ISO/BIN processing.');
+
+    debugPrint('Finished PS2 hashing. Found ${hashes.length} hashes.');
     return hashes;
   }
-  
-  /// Hash a PS2 CHD file using the isolate processor
-  Future<String?> _hashPs2Chd(String filePath) async {
-    // Use the isolate processor to handle CHD files
-    return await IsolateChdProcessor.processChd(filePath);
-  }
-  
-  /// Hash a PS2 ISO/BIN file
-  Future<String?> _hashPs2File(String filePath) async {
+
+  /// Hashes a PS2 ISO or BIN file using direct filesystem access.
+  ///
+  /// [filePath]: Path to the .iso or .bin file.
+  /// Returns the MD5 hash or null on error.
+  Future<String?> _hashPs2IsoBinFile(String filePath) async {
     final file = File(filePath);
-    if (!await file.exists()) return null;
-    
+    // Existence already checked in the calling loop, but double-check doesn't hurt
+    if (!await file.exists()) {
+       debugPrint('ISO/BIN file not found: $filePath');
+       return null;
+    }
+
+
     try {
-      // First find the SYSTEM.CNF file in the filesystem
-      final systemCnfData = await _findAndReadSystemCnf(file);
+      // Use the dedicated filesystem reader for ISO/BIN
+      final fsReader = Ps2FilesystemReader(file);
+
+      // 1. Find and read SYSTEM.CNF
+      final systemCnfData = await fsReader.findAndReadFile('SYSTEM.CNF');
       if (systemCnfData == null) {
         debugPrint('Could not find or read SYSTEM.CNF in $filePath');
+        // Attempt fallback? For PS2, SYSTEM.CNF is usually mandatory.
         return null;
       }
-      
-      // Parse SYSTEM.CNF to find the boot executable
+
+      // 2. Parse SYSTEM.CNF to find the boot executable (BOOT2)
       final exePath = _findBootExecutable(systemCnfData);
       if (exePath == null) {
-        debugPrint('Could not find boot executable path in SYSTEM.CNF');
+        debugPrint('Could not find BOOT2 executable path in SYSTEM.CNF for $filePath');
         return null;
       }
-      
-      debugPrint('Found boot executable: $exePath');
-      
-      // Find and read the executable
-      final exeData = await _findAndReadFile(file, exePath);
+      debugPrint('Found PS2 boot executable in ISO/BIN: $exePath');
+
+
+      // 3. Find and read the executable file
+      // Note: exePath is relative to the root, e.g., "SLUS_123.45" or "MYGAME/EXEC.ELF"
+      final exeData = await fsReader.findAndReadFile(exePath);
       if (exeData == null) {
-        debugPrint('Could not find or read executable: $exePath');
+        debugPrint('Could not find or read executable "$exePath" in $filePath');
         return null;
       }
-      
-      // Check for ELF header (0x7F, 0x45, 0x4C, 0x46)
+
+      // Optional: Check for ELF header
       if (exeData.length >= 4) {
-        if (exeData[0] != 0x7F || exeData[1] != 0x45 || 
-            exeData[2] != 0x4C || exeData[3] != 0x46) {
-          debugPrint('Warning: Executable does not have ELF header signature');
-        }
+         if (exeData[0] != 0x7F || exeData[1] != 0x45 || exeData[2] != 0x4C || exeData[3] != 0x46) {
+            debugPrint('Warning: PS2 executable "$exePath" in ISO/BIN does not have ELF header.');
+         }
+      } else {
+          debugPrint('Warning: PS2 executable "$exePath" in ISO/BIN is very small (< 4 bytes).');
       }
-      
-      // Create hash from both the executable name and content (matching the C implementation)
-      final digest = crypto.md5.convert(utf8.encode(exePath) + exeData);
+
+
+      // 4. Calculate the MD5 hash
+      // Hash combines the executable path string (UTF-8) and the executable content.
+      final pathBytes = utf8.encode(exePath); // Use the path found in SYSTEM.CNF
+      final combinedData = Uint8List(pathBytes.length + exeData.length);
+      combinedData.setRange(0, pathBytes.length, pathBytes);
+      combinedData.setRange(pathBytes.length, combinedData.length, exeData);
+
+      final digest = crypto.md5.convert(combinedData);
       return digest.toString();
+
     } catch (e, stackTrace) {
-      debugPrint('Error hashing PS2 file: $e');
+      debugPrint('Error hashing PS2 ISO/BIN file $filePath: $e');
       debugPrint('Stack trace: $stackTrace');
       return null;
     }
   }
-  
-  /// Find and read the SYSTEM.CNF file from a PS2 disc image
-  Future<Uint8List?> _findAndReadSystemCnf(File file) async {
-    // Find the root directory
-    final rootDirSector = await _findRootDirectorySector(file);
-    if (rootDirSector == null) return null;
-    
-    // Find SYSTEM.CNF in the root directory
-    return await _findAndReadFile(file, 'SYSTEM.CNF', rootDirSector: rootDirSector);
-  }
-  
-  /// Find and read a file from the ISO filesystem
-  Future<Uint8List?> _findAndReadFile(File file, String filePath, {int? rootDirSector}) async {
+
+  /// Parses the content of SYSTEM.CNF to find the BOOT2 executable path.
+  /// (Static helper method, could be moved elsewhere if needed)
+  static String? _findBootExecutable(Uint8List data) {
+    // Re-uses the same logic as in Ps2ChdProcessor
+    const String cdromPrefix = "cdrom0:";
     try {
-      // If root directory sector not provided, find it
-      rootDirSector ??= await _findRootDirectorySector(file);
-      if (rootDirSector == null) return null;
-      
-      // Find the file in the directory structure
-      final fileInfo = await _findFileInDirectory(file, rootDirSector, filePath);
-      if (fileInfo == null) return null;
-      
-      // Read the file data
-      return await _readSectors(file, fileInfo.lba, fileInfo.size);
-    } catch (e) {
-      debugPrint('Error finding/reading file: $e');
-      return null;
-    }
-  }
-  
-  /// Find the root directory sector in an ISO file
-  Future<int?> _findRootDirectorySector(File file) async {
-    try {
-      // In ISO9660, the Primary Volume Descriptor starts at sector 16
-      final pvdData = await _readSector(file, 16);
-      if (pvdData == null || pvdData.length < 166) return null;
-      
-      // Check for ISO9660 identifier "CD001"
-      if (pvdData[1] != 0x43 || pvdData[2] != 0x44 || 
-          pvdData[3] != 0x30 || pvdData[4] != 0x30 || 
-          pvdData[5] != 0x31) {
-        return null; // Not an ISO9660 filesystem
-      }
-      
-      // Extract the root directory location (bytes 156-159)
-      final rootDirLba = pvdData[156 + 2] | 
-                         (pvdData[156 + 3] << 8) | 
-                         (pvdData[156 + 4] << 16) | 
-                         (pvdData[156 + 5] << 24);
-      
-      return rootDirLba;
-    } catch (e) {
-      debugPrint('Error finding root directory: $e');
-      return null;
-    }
-  }
-  
-  /// Find a file in a directory sector
-  Future<_FileInfo?> _findFileInDirectory(File file, int sectorLba, String fileName) async {
-    try {
-      // Normalize filename: Convert to uppercase and handle path separators
-      fileName = fileName.toUpperCase().replaceAll('\\', '/');
-      
-      // Handle path components
-      if (fileName.contains('/')) {
-        final pathParts = fileName.split('/');
-        final firstPart = pathParts.first;
-        
-        // Find the subdirectory
-        final dirEntry = await _findDirectoryEntry(file, sectorLba, firstPart, true);
-        if (dirEntry == null) return null;
-        
-        // Recurse into the subdirectory
-        return await _findFileInDirectory(
-          file, 
-          dirEntry.lba, 
-          pathParts.sublist(1).join('/')
-        );
-      }
-      
-      // Find the file entry
-      final fileEntry = await _findDirectoryEntry(file, sectorLba, fileName, false);
-      if (fileEntry == null) return null;
-      
-      return _FileInfo(lba: fileEntry.lba, size: fileEntry.size);
-    } catch (e) {
-      debugPrint('Error finding file in directory: $e');
-      return null;
-    }
-  }
-  
-  /// Find a directory entry by name
-  Future<_DirectoryEntry?> _findDirectoryEntry(
-    File file, 
-    int sectorLba, 
-    String targetName,
-    bool isDirectory
-  ) async {
-    int currentSector = sectorLba;
-    bool continueReading = true;
-    
-    while (continueReading) {
-      final sectorData = await _readSector(file, currentSector);
-      if (sectorData == null) return null;
-      
-      // Process directory entries in this sector
-      int offset = 0;
-      while (offset < 2048) {
-        // Directory record length is at offset 0
-        final recordLength = sectorData[offset];
-        if (recordLength == 0) {
-          // Advance to the next sector boundary
-          offset = (offset ~/ 2048 + 1) * 2048;
-          if (offset >= 2048) {
-            currentSector++;
-            continueReading = true;
-            break;
-          }
-          continue;
-        }
-        
-        if (offset + recordLength > 2048) {
-          // Entry spans sectors - not handling this case
-          currentSector++;
-          continueReading = true;
-          break;
-        }
-        
-        // File flags (bit 1 = directory)
-        final fileFlags = sectorData[offset + 25];
-        final entryIsDirectory = (fileFlags & 0x02) != 0;
-        
-        // Skip if we're looking for a directory but this isn't one
-        // or if we're looking for a file but this is a directory
-        if ((isDirectory && !entryIsDirectory) || (!isDirectory && entryIsDirectory)) {
-          offset += recordLength;
-          continue;
-        }
-        
-        // File name length is at offset 32
-        final nameLength = sectorData[offset + 32];
-        if (nameLength == 0) {
-          offset += recordLength;
-          continue;
-        }
-        
-        // Extract the name
-        String name = '';
-        for (int i = 0; i < nameLength; i++) {
-          name += String.fromCharCode(sectorData[offset + 33 + i]);
-        }
-        
-        // Strip version number (;1)
-        final semicolonPos = name.indexOf(';');
-        if (semicolonPos >= 0) {
-          name = name.substring(0, semicolonPos);
-        }
-        
-        // Check if this matches our target
-        if (name == targetName) {
-          // Extract LBA and size
-          final entryLba = sectorData[offset + 2] | 
-                         (sectorData[offset + 3] << 8) | 
-                         (sectorData[offset + 4] << 16) | 
-                         (sectorData[offset + 5] << 24);
-          
-          final entrySize = sectorData[offset + 10] | 
-                         (sectorData[offset + 11] << 8) | 
-                         (sectorData[offset + 12] << 16) | 
-                         (sectorData[offset + 13] << 24);
-          
-          return _DirectoryEntry(
-            name: name,
-            lba: entryLba,
-            size: entrySize,
-            isDirectory: entryIsDirectory
-          );
-        }
-        
-        offset += recordLength;
-      }
-      
-      // If we didn't break out of the loop to continue to the next sector,
-      // we've processed all entries
-      continueReading = false;
-    }
-    
-    return null; // Entry not found
-  }
-  
-  /// Find boot executable path in SYSTEM.CNF
-  String? _findBootExecutable(Uint8List data) {
-    try {
-      // Convert to string with allowMalformed to handle potential encoding issues
       final content = utf8.decode(data, allowMalformed: true);
-      
-      // Look for the boot key pattern
-      final bootPattern = RegExp('$_bootKey\\s*=\\s*$_cdromPrefix\\\\?([^;\\s\\r\\n]+)');
+      final bootPattern = RegExp(
+          r'^\s*' + _bootKey + r'\s*=\s*' + cdromPrefix + r'\\?([^\s;]+)',
+          caseSensitive: false,
+          multiLine: true,
+      );
       final match = bootPattern.firstMatch(content);
-      
+
       if (match != null && match.groupCount >= 1) {
         String execPath = match.group(1)!;
-        
-        // Sanitize the path
         execPath = execPath.split(';').first.trim();
-        
+        execPath = execPath.replaceAll('\\', '/'); // Use forward slash
+         if (execPath.startsWith('/')) {
+           execPath = execPath.substring(1); // Remove leading slash
+         }
         return execPath;
       }
-      
+       debugPrint('BOOT2 key not found or invalid format in SYSTEM.CNF content.');
       return null;
     } catch (e) {
-      debugPrint('Error parsing SYSTEM.CNF: $e');
+      debugPrint('Error parsing SYSTEM.CNF for BOOT2 key: $e');
       return null;
     }
   }
-  
-  /// Read a single sector from the file
-  Future<Uint8List?> _readSector(File file, int sector) async {
-    return await _readSectors(file, sector, 2048); // Standard ISO sector size
-  }
-  
-  /// Read multiple sectors from the file
-  Future<Uint8List?> _readSectors(File file, int startSector, int size) async {
-    try {
-      const sectorSize = 2048; // Standard ISO sector size
-      final position = startSector * sectorSize;
-      
-      final raf = await file.open(mode: FileMode.read);
-      try {
-        await raf.setPosition(position);
-        return await raf.read(size);
-      } finally {
-        await raf.close();
-      }
-    } catch (e) {
-      debugPrint('Error reading sectors: $e');
-      return null;
-    }
-  }
-}
-
-/// Helper class to store file information
-class _FileInfo {
-  final int lba;
-  final int size;
-  
-  _FileInfo({required this.lba, required this.size});
-}
-
-/// Helper class to store directory entry information
-class _DirectoryEntry {
-  final String name;
-  final int lba;
-  final int size;
-  final bool isDirectory;
-  
-  _DirectoryEntry({
-    required this.name,
-    required this.lba,
-    required this.size,
-    required this.isDirectory,
-  });
 }

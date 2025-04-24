@@ -26,7 +26,7 @@ class RCHashDLL {
   static bool _initialized = false;
   static final Finalizer<DynamicLibrary> _finalizer = Finalizer((library) {
     // Clean up code if needed when library is garbage collected
-    debugPrint('RCHashDLL library finalized');
+    
   });
   
   // Singleton pattern with lazy initialization
@@ -46,12 +46,12 @@ class RCHashDLL {
   void _initializeLib() {
     try {
       final libraryPath = _getLibraryPath();
-      debugPrint('Loading RC Hash DLL from: $libraryPath');
+      
       
       try {
         _lib = DynamicLibrary.open(libraryPath);
         _finalizer.attach(this, _lib); // Register for cleanup
-        debugPrint('Successfully loaded RC Hash DLL');
+        
       } catch (e) {
         debugPrint('Failed to load RC Hash DLL: $e');
         throw Exception('Failed to load RC Hash DLL: $e');
@@ -68,7 +68,7 @@ class RCHashDLL {
         getConsoleIdFromName = _getConsoleIdFromName.asFunction();
         initHashLibrary = _initHashLibrary.asFunction();
         
-        debugPrint('Successfully initialized RC Hash DLL functions');
+        
       } catch (e) {
         debugPrint('Failed to initialize RC Hash DLL functions: $e');
         throw Exception('Failed to initialize RC Hash DLL functions: $e');
@@ -77,7 +77,7 @@ class RCHashDLL {
       // Initialize the library
       try {
         initHashLibrary();
-        debugPrint('Successfully initialized RC Hash Library');
+        
       } catch (e) {
         debugPrint('Failed to initialize RC Hash Library: $e');
         throw Exception('Failed to initialize RC Hash Library: $e');
