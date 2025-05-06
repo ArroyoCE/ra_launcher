@@ -9,12 +9,21 @@ import 'package:retroachievements_organizer/repositories/local_data_repository.d
 // Import specialized hash integrations
 import 'package:retroachievements_organizer/services/hashing/3DO/hash_3do_main.dart';
 import 'package:retroachievements_organizer/services/hashing/DC/dreamcast_hash_integration.dart';
+import 'package:retroachievements_organizer/services/hashing/NeoGeoCD/neo_geo_cd_hashing_integration.dart';
 import 'package:retroachievements_organizer/services/hashing/PCECD/pce_cd_hash_integration.dart';
 import 'package:retroachievements_organizer/services/hashing/PCFX/pcfx_hash_integration.dart';
 import 'package:retroachievements_organizer/services/hashing/PS2/ps2_hash_integration.dart';
 import 'package:retroachievements_organizer/services/hashing/PSP/psp_hash_integration.dart';
+import 'package:retroachievements_organizer/services/hashing/SegaCD/saturn_hash_integration.dart';
 import 'package:retroachievements_organizer/services/hashing/SegaCD/sega_cd_hash_integration.dart';
+import 'package:retroachievements_organizer/services/hashing/a78_hash_integration.dart';
+import 'package:retroachievements_organizer/services/hashing/arcade_hash_integration.dart';
+import 'package:retroachievements_organizer/services/hashing/arduboy_hash_integration.dart';
+import 'package:retroachievements_organizer/services/hashing/lynx_hash_integration.dart';
+import 'package:retroachievements_organizer/services/hashing/md5_hash_integration.dart';
+import 'package:retroachievements_organizer/services/hashing/n64_hash_integration.dart';
 import 'package:retroachievements_organizer/services/hashing/native/unified_hash_service.dart';
+import 'package:retroachievements_organizer/services/hashing/nds_hash_integration.dart';
 import 'package:retroachievements_organizer/services/hashing/pce_hash_integration.dart';
 import 'package:retroachievements_organizer/services/hashing/psx/psx_hash_integration.dart';
 import 'package:retroachievements_organizer/services/hashing/snes_hash_integration.dart';
@@ -318,6 +327,72 @@ Future<Map<String, String>> hashFilesInFolders(int consoleId, List<String> folde
     }
 
 
+
+         // Special case for Arduboy
+    if (hashMethod == HashMethod.arduboy) {
+      final arduboyHashIntegration = ArduboyHashIntegration();
+      debugPrint('Starting Arduboy hashing, this might take some time...');
+      
+      final arduboyHashes = await arduboyHashIntegration.hashArduboyFilesInFolders(folders);
+      
+      // Save the Arduboy hashes
+      await saveLocalHashes(consoleId, arduboyHashes);
+      return arduboyHashes;
+    }
+
+
+
+     // Special case for Arcade games
+    if (hashMethod == HashMethod.arcade) {
+      final arcadeHashIntegration = ArcadeHashIntegration();
+      debugPrint('Starting Arcade hashing, this might take some time...');
+      
+      final arcadeHashes = await arcadeHashIntegration.hashArcadeFilesInFolders(folders);
+      
+      // Save the Arcade hashes
+      await saveLocalHashes(consoleId, arcadeHashes);
+      return arcadeHashes;
+    }
+
+         // Special case for Atari Lynx games
+    if (hashMethod == HashMethod.lynx) {
+      final lynxHashIntegration = LynxHashIntegration();
+      debugPrint('Starting Atari Lynx hashing, this might take some time...');
+      
+      final lynxHashes = await lynxHashIntegration.hashLynxFilesInFolders(folders);
+      
+      // Save the Atari Lynx hashes
+      await saveLocalHashes(consoleId, lynxHashes);
+      return lynxHashes;
+    }
+    
+     // Special case for aTARI 7800 games
+    if (hashMethod == HashMethod.a78) {
+      final a78HashIntegration = A78HashIntegration();
+      debugPrint('Starting Atari 7800 hashing, this might take some time...');
+      
+      final a78Hashes = await a78HashIntegration.hashA78FilesInFolders(folders);
+      
+      // Save the Atari 7800 hashes
+      await saveLocalHashes(consoleId, a78Hashes);
+      return a78Hashes;
+    }
+
+
+
+     // Special case for MD5 games
+    if (hashMethod == HashMethod.md5) {
+      final md5HashIntegration = MD5HashIntegration();
+      debugPrint('Starting hashing, this might take some time...');
+      
+      final md5Hashes = await md5HashIntegration.hashFilesInFolders(folders, getFileExtensionsForConsole(consoleId));
+      
+      // Save the MD5 hashes
+      await saveLocalHashes(consoleId, md5Hashes);
+      return md5Hashes;
+    }
+
+
     // Special case for Sega CD
     if (hashMethod == HashMethod.segacd) {
       final segacdHashIntegration = SegaCDHashIntegration();
@@ -329,6 +404,21 @@ Future<Map<String, String>> hashFilesInFolders(int consoleId, List<String> folde
       await saveLocalHashes(consoleId, segacdHashes);
       return segacdHashes;
     }
+
+ // Special case for Saturn
+    if (hashMethod == HashMethod.saturn) {
+      final saturnHashIntegration = SegaSaturnHashIntegration();
+      debugPrint('Starting Saturn hashing, this might take some time...');
+      
+      final saturnHashes = await saturnHashIntegration.hashSegaSaturnFilesInFolders(folders);
+      
+      // Save the Saturn hashes
+      await saveLocalHashes(consoleId, saturnHashes);
+      return saturnHashes;
+    }
+    
+
+
 
     // Special case for PSP
     if (hashMethod == HashMethod.psp) {
@@ -370,6 +460,8 @@ Future<Map<String, String>> hashFilesInFolders(int consoleId, List<String> folde
       return threedoHashes;
     }
 
+
+
     //Special Case for PCFX
     if (hashMethod == HashMethod.pcfx) {
       final pcfxHashIntegration = PCFXHashIntegration();
@@ -383,6 +475,22 @@ Future<Map<String, String>> hashFilesInFolders(int consoleId, List<String> folde
     }
 
 
+
+
+     // Special case for Neo Geo CD
+    if (hashMethod == HashMethod.ngcd) {
+      final ngcdHashIntegration = NeoGeocdHashIntegration();
+      debugPrint('Starting PC Engine hashing, this might take some time...');
+      
+      final ngcdHashes = await ngcdHashIntegration.hashNeoGeocdFilesInFolders(folders);
+      
+      // Save the Neo Geo CD hashes
+      await saveLocalHashes(consoleId, ngcdHashes);
+      return ngcdHashes;
+    }
+
+
+
      // Special case for Dreamcast
     if (hashMethod == HashMethod.dc) {
       final dcHashIntegration = DreamcastHashIntegration();
@@ -390,11 +498,36 @@ Future<Map<String, String>> hashFilesInFolders(int consoleId, List<String> folde
       
       final dcHashes = await dcHashIntegration.hashDreamcastFilesInFolders(folders);
       
-      // Save the PC Engine hashes
+      // Save the Dreamcast hashes
       await saveLocalHashes(consoleId, dcHashes);
       return dcHashes;
     }
 
+
+        // Special case for NDS
+    if (hashMethod == HashMethod.nds) {
+      final ndsHashIntegration = NdsHashIntegration();
+      debugPrint('Starting Nintendo DS hashing, this might take some time...');
+      
+      final ndsHashes = await ndsHashIntegration.hashNdsFilesInFolders(folders);
+      
+      // Save the NDS hashes
+      await saveLocalHashes(consoleId, ndsHashes);
+      return ndsHashes;
+    }
+
+
+    // Special case for Nintendo 64
+    if (hashMethod == HashMethod.n64) {
+      final n64HashIntegration = N64HashIntegration();
+      debugPrint('Starting Nintendo 64 hashing, this might take some time...');
+      
+      final n64Hashes = await n64HashIntegration.hashN64FilesInFolders(folders);
+      
+      // Save the N64 hashes
+      await saveLocalHashes(consoleId, n64Hashes);
+      return n64Hashes;
+    }
 
     // Special case for PC Engine
     if (hashMethod == HashMethod.pce) {
@@ -433,6 +566,8 @@ Future<Map<String, String>> hashFilesInFolders(int consoleId, List<String> folde
       await saveLocalHashes(consoleId, psxHashes);
       return psxHashes;
     }
+
+
 
     // Special case for PlayStation 2
     if (hashMethod == HashMethod.ps2) {

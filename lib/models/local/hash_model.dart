@@ -164,7 +164,7 @@ static final Map<int, List<String>> consoleFileExtensions = {
   // PC Engine/TurboGrafx-16
   8: ['.pce', '.sgx'],
   //Sega CD
-  9: ['.chd', '.bin', '.iso'],
+  9: ['.chd', '.iso', '.cue'],
   // NeoGeo Pocket
   14: ['.ngp', '.ngc'],
   // Game Gear
@@ -194,11 +194,11 @@ static final Map<int, List<String>> consoleFileExtensions = {
   //Apple II
   38: ['.dsk', '.woz', '.nib'],
   //Saturn
-  39: ['.chd', '.bin', '.iso'],
+  39: ['.chd', '.cue', '.iso'],
   //DREAMCAST
   40: ['.chd', '.gdi', '.cue', '.cdi'],
   //PSP
-  41: ['.bin', '.iso', '.chd'],
+  41: ['.cue', '.iso', '.chd'],
    // 3DO
   43: ['.cue', '.chd', '.iso'],
   // ColecoVision
@@ -210,7 +210,7 @@ static final Map<int, List<String>> consoleFileExtensions = {
   //NEC PC-8000
   47: ['.d88'],
   //PC-FX
-  49: ['.iso', '.bin', '.img', '.chd'],
+  49: ['.iso', '.cue', '.img', '.chd', '.bin'],
   // Wonderswan
   53: ['.bin', '.ws', '.wsc'],
   //Neo Geo CD
@@ -230,9 +230,9 @@ static final Map<int, List<String>> consoleFileExtensions = {
   //Interton VC4000
   74: ['.bin'],
   //Elektor TV
-  75: ['.bin', '.pgm', '.tvc'],
+  75: ['.bin', '.pgm', '.tvc', '.zip'],
   //PCE CD
-  76: ['.img', '.chd', '.bin', '.iso'],
+  76: ['.img', '.chd', '.cue', '.iso'],
   //DSi
   78: ['.nds', '.dsi', '.ids'],
   //Uzebox

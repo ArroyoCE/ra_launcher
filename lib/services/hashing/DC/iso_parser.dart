@@ -383,7 +383,7 @@ static Future<IsoFileInfo?> findFileInIso(SectorReader reader, String fileName) 
     // Standard ISO9660 directory parsing approach
     int bytesProcessed = 0;
     int currentLogicalSector = rootDirSector;
-    IsoFileInfo? foundFile = null;
+    IsoFileInfo? foundFile;
     
     while (bytesProcessed < rootDirSize) {
        debugPrint('Attempting to read directory sector $currentLogicalSector...');

@@ -67,7 +67,6 @@ class DreamcastDiscReader {
            return tracks.firstWhere((t) => t.type == 4); 
          
         });
-      if (dataTrack == null) return null;
       debugPrint('Using GDI data track: #${dataTrack.trackNumber}, File: ${dataTrack.filename}, Raw Sector Size: ${dataTrack.sectorSize}');
 
       // 3. Open Track File
@@ -143,7 +142,7 @@ class DreamcastDiscReader {
 
 
       // 8. Find and Read Boot File
-      IsoFileInfo? bootFileInfo = await IsoParser.findFileInIso(sectorReader!, isoBootFileName);
+      IsoFileInfo? bootFileInfo = await IsoParser.findFileInIso(sectorReader, isoBootFileName);
       if (bootFileInfo == null && isoBootFileName == "1ST_READ.BIN") {
         debugPrint('Using fixed fallback location for 1ST_READ.BIN');
         bootFileInfo = IsoFileInfo(45032, 1024 * 1024);
@@ -251,7 +250,7 @@ class DreamcastDiscReader {
       );
 
       // 5. Extract Boot File Name Bytes
-      final bootFileNameBytes = DreamcastHashUtils.extractBootFileNameBytes(ipBinData!); // ipBinData checked above
+      final bootFileNameBytes = DreamcastHashUtils.extractBootFileNameBytes(ipBinData); // ipBinData checked above
       if (bootFileNameBytes == null || bootFileNameBytes.isEmpty) return null;
       String isoBootFileName;
       try {
